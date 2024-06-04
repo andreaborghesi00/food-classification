@@ -1,6 +1,7 @@
 # ---
 # jupyter:
 #   jupytext:
+#     formats: ipynb,py:percent
 #     text_representation:
 #       extension: .py
 #       format_name: percent
@@ -18,7 +19,6 @@
 #
 
 # %%
-
 import os
 import sys
 import argparse
@@ -26,10 +26,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# %%
 if not os.path.exists('dataset'):
     os.makedirs('dataset')
-
-# download the dataset if the file does not exist
 
 if not os.path.exists('dataset/train_info.csv'):
     os.system('wget https://food-x.s3.amazonaws.com/annot.tar -O dataset/annot.tar')
