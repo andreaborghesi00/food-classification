@@ -21,6 +21,7 @@
 # %%
 import os
 import torch
+import torch.nn as nn
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -69,6 +70,7 @@ if not os.path.exists('dataset/val_set'):
 
 
 # %%
+
 def get_df(path, class_list=None):
     
     df = pd.read_csv(path, header=None)
@@ -85,6 +87,8 @@ class_list = pd.read_csv('dataset/class_list.txt', header=None, sep=' ', names=[
 train_df = get_df('dataset/train_info.csv', class_list)
 test_df = get_df('dataset/test_info.csv', class_list)
 val_df = get_df('dataset/val_info.csv', class_list)
+
+train_df
 
 
 # %%
@@ -221,13 +225,12 @@ print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 # %%
 train(model, train_dl, val_dl, optimizer, criterion, epochs)
 
+
 # %% [markdown]
 # ----
 # # <center>SIFT and Bag of Words for feature extraction
 
 # %%
-force_recompute = False
-
 def extract_sift_features(image_path):
     image = cv2.imread(image_path)
     if image is None:
@@ -265,21 +268,35 @@ def extract_bag_of_words(features, dictionary):
 
 
 # %%
+def extract_save_bag_of_words(features, dictionary, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    for i in tqdm(range(len(features))):
+        if features[i].size > 0:  # Skip if features[i] is empty
+            words = dictionary.predict(features[i].astype(np.float32))
+            bow_features = np.bincount(words, minlength=dictionary.n_clusters)
+        else:
+            bow_features = np.zeros(dictionary.n_clusters, dtype=np.float32)  # Append zeros if no features
+        # take the name from the df
+        filename = f"bow_features_{i}.npy"
+        np.save(os.path.join(output_dir, filename), bow_features)
+
+
+# %%
 force_recompute_sift = False
 force_recompute_bow = False
 
 if not os.path.exists('dataset/train_features.pkl') or force_recompute_sift:
     train_features = extract_sift_features_from_df(train_df, 'dataset/train_set')
     pickle.dump(train_features, open('dataset/train_features.pkl', 'wb'))
-    test_features = extract_sift_features_from_df(test_df, 'dataset/test_set')
-    pickle.dump(test_features, open('dataset/test_features.pkl', 'wb'))
+    #test_features = extract_sift_features_from_df(test_df, 'dataset/test_set')
+    #pickle.dump(test_features, open('dataset/test_features.pkl', 'wb'))
     val_features = extract_sift_features_from_df(val_df, 'dataset/val_set')
     pickle.dump(val_features, open('dataset/val_features.pkl', 'wb'))
 else:
     train_features = pickle.load(open('dataset/train_features.pkl', 'rb'))
     val_features = pickle.load(open('dataset/val_features.pkl', 'rb'))
 
-
+# %%
 n_clusters = 1000
 
 if not os.path.exists('dataset/dictionary.pkl') or force_recompute_bow:
@@ -291,28 +308,188 @@ else:
 
 
 # %%
-train_bow = extract_bag_of_words(train_features, dictionary)
-del train_features
-val_bow = extract_bag_of_words(val_features, dictionary)
-del val_features
+extract_save_bag_of_words(train_features, dictionary, 'dataset/train_bow')
+extract_save_bag_of_words(val_features, dictionary, 'dataset/val_bow')
+
+
+# %%
+#train_bow = extract_bag_of_words(train_features, dictionary)
+#del train_features
+#extract_bag_of_words(val_features, dictionary)
+#del val_features
 
 # %%
 # SVM
-clf = SVC()
-clf.fit(train_bow, train_df.iloc[:, 1], )
-train_pred = clf.predict(train_bow)
-val_pred = clf.predict(val_bow)
-# save to file
-pickle.dump(train_pred, open('dataset/svm_train_pred.pkl', 'wb'))
-pickle.dump(val_pred, open('dataset/svm_val_pred.pkl', 'wb'))
+# clf = SVC()
+# clf.fit(train_bow, train_df.iloc[:, 1], )
+# train_pred = clf.predict(train_bow)
+# val_pred = clf.predict(val_bow)
+# # save to file
+# pickle.dump(train_pred, open('dataset/svm_train_pred.pkl', 'wb'))
+# pickle.dump(val_pred, open('dataset/svm_val_pred.pkl', 'wb'))
+
+# train_acc = accuracy_score(train_df.iloc[:, 1], train_pred)
+# val_acc = accuracy_score(val_df.iloc[:, 1], val_pred)
+
+# print(f'SVM Train Accuracy: {train_acc:.3f}, Val Accuracy: {val_acc:.3f}')
+
+# %% [markdown]
+# ----
+# # <center>CNN with BoW features
+
+# %%
+class FoodBowDataset(Dataset):
+    def __init__(self, df, bow_dir, root_dir, transform=None):
+        self.df = df
+        self.bow_dir = bow_dir
+        self.root_dir = root_dir
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.df)
+    
+    def __getitem__(self, idx):
+        bow = np.load(os.path.join(self.bow_dir, f'bow_features_{idx}.npy'))
+        bow = bow.astype(np.float32)  # Convert bow features to float
+        img_name = os.path.join(self.root_dir, self.df.iloc[idx, 0])
+        image = Image.open(img_name)
+
+        if self.transform:
+            image = self.transform(image)
+
+        if self.df.shape[1] == 3:
+            label = self.df.iloc[idx, 1]
+            return bow, image, label
+        return bow, image
 
 
+# %%
+transform = transforms.Compose([
+    transforms.Resize((128, 128)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
+])
+
+train_bow_ds = FoodBowDataset(train_df, 'dataset/train_bow', 'dataset/train_set', transform)
+val_bow_ds = FoodBowDataset(val_df, 'dataset/val_bow', 'dataset/val_set', transform)
+
+train_bow_dl = DataLoader(train_bow_ds, batch_size=256, shuffle=True, num_workers=8)
+val_bow_dl = DataLoader(val_bow_ds, batch_size=256, shuffle=False, num_workers=8)
 
 
-train_acc = accuracy_score(train_df.iloc[:, 1], train_pred)
-val_acc = accuracy_score(val_df.iloc[:, 1], val_pred)
+# %%
+class FoodBowCNN(nn.Module):
+    def __init__(self, n_clusters, n_classes):
+        super(FoodBowCNN, self).__init__()
+        self.n_clusters = n_clusters
+        self.n_classes = n_classes
+        
+        # Convolutional layers for image feature extraction
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout = nn.Dropout(p=0.25)
+        
+        # Fully connected layers for image features
+        self.fc1 = nn.Linear(64 * 32 * 32, 512)
+        self.fc2 = nn.Linear(512, 256)
+        
+        # Fully connected layers for BoW features
+        self.bow_fc1 = nn.Linear(n_clusters, 256)
+        self.bow_fc2 = nn.Linear(256, 128)
+        
+        # Fully connected layers for combined features
+        self.combined_fc1 = nn.Linear(256 + 128, 512)
+        self.combined_fc2 = nn.Linear(512, n_classes)
+        
+        self.relu = nn.ReLU()
+        
+    def forward(self, bow_features, image):
+        # Image feature extraction
+        x = self.pool(self.relu(self.conv1(image)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = x.view(-1, 64 * 32 * 32)
+        x = self.relu(self.fc1(x))
+        img_features = self.relu(self.fc2(x))
+        
+        # BoW feature processing
+        bow_features = self.relu(self.bow_fc1(bow_features))
+        bow_features = self.relu(self.bow_fc2(bow_features))
+        
+        # Combine image and BoW features
+        combined_features = torch.cat((img_features, bow_features), dim=1)
+        
+        # Final classification
+        x = self.relu(self.combined_fc1(combined_features))
+        x = self.dropout(x)
+        out = self.combined_fc2(x)
+        
+        return out
 
-print(f'SVM Train Accuracy: {train_acc:.3f}, Val Accuracy: {val_acc:.3f}')
+
+# %%
+def train(model, train_dl, val_dl, optimizer, criterion, epochs):
+    train_loss = []
+    val_loss = []
+    train_acc = []
+    val_acc = []
+
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        for i, data in enumerate(train_dl):
+            bow, image, labels = data
+            bow, image, labels = bow.to(device), image.to(device), labels.to(device)
+            
+            optimizer.zero_grad()
+            
+            outputs = model(bow, image)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            
+        train_loss.append(running_loss/len(train_dl))
+        train_acc.append(100*correct/total)
+        
+        model.eval()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for i, data in enumerate(val_dl):
+                bow, image, labels = data
+                bow, image, labels = bow.to(device), image.to(device), labels.to(device)
+                
+                outputs = model(bow, image)
+                loss = criterion(outputs, labels)
+                
+                running_loss += loss.item()
+                
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+                
+        val_loss.append(running_loss/len(val_dl))
+        val_acc.append(100*correct/total)
+        
+        print(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {val_loss[-1]:.3f}, Val Acc: {val_acc[-1]:.3f}%')
+        
+model = FoodBowCNN(n_clusters, 251).to(device)
+criterion = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+epochs = 100
+print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
+
+train(model, train_bow_dl, val_bow_dl, optimizer, criterion, epochs)
+
 
 # %% [markdown]
 # ----
