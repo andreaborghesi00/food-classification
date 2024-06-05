@@ -25,13 +25,21 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import pandas as pd
+import pickle
 import cv2
 
 
 from torch.utils.data import Dataset, DataLoader
+from sklearn.cluster import MiniBatchKMeans
 from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
+
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
+    
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -222,9 +230,17 @@ force_recompute = False
 
 def extract_sift_features(image_path):
     image = cv2.imread(image_path)
+    if image is None:
+        print(f"Failed to load image at {image_path}")
+        return np.empty((0, 128), dtype=np.float32)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # resize image
+    gray = cv2.resize(gray, (128, 128))
     sift = cv2.SIFT_create()
     keypoints, descriptors = sift.detectAndCompute(gray, None)
+    if descriptors is None:
+        # No descriptors found, return an empty array
+        descriptors = np.empty((0, 128), dtype=np.float32)
     return descriptors
 
 def extract_sift_features_from_df(df, root_dir):
@@ -234,39 +250,89 @@ def extract_sift_features_from_df(df, root_dir):
         features.append(extract_sift_features(img_name))
     return features
 
-if not os.path.exists('dataset/train_features.npy') or force_recompute:
-    train_features = extract_sift_features_from_df(train_df, 'dataset/train_set')
-    test_features = extract_sift_features_from_df(test_df, 'dataset/test_set')
-    val_features = extract_sift_features_from_df(val_df, 'dataset/val_set')
-    np.save('dataset/train_features.npy', train_features)
-    np.save('dataset/test_features.npy', test_features)
-    np.save('dataset/val_features.npy', val_features)
-else:
-    train_features = np.load('dataset/train_features.npy', allow_pickle=True)
-    test_features = np.load('dataset/test_features.npy', allow_pickle=True)
-    val_features = np.load('dataset/val_features.npy', allow_pickle=True)
 
 
 # %%
 def extract_bag_of_words(features, dictionary):
     bow = []
     for i in tqdm(range(len(features))):
-        words = dictionary.predict(features[i])
-        bow.append(np.bincount(words, minlength=dictionary.n_clusters))
+        if features[i].size > 0:  # Skip if features[i] is empty
+            words = dictionary.predict(features[i].astype(np.float32))
+            bow.append(np.bincount(words, minlength=dictionary.n_clusters))
+        else:
+            bow.append(np.zeros(dictionary.n_clusters, dtype=np.float32))  # Append zeros if no features
     return np.array(bow)
 
-from sklearn.cluster import MiniBatchKMeans
+
+# %%
+force_recompute_sift = False
+force_recompute_bow = False
+
+if not os.path.exists('dataset/train_features.pkl') or force_recompute_sift:
+    train_features = extract_sift_features_from_df(train_df, 'dataset/train_set')
+    pickle.dump(train_features, open('dataset/train_features.pkl', 'wb'))
+    test_features = extract_sift_features_from_df(test_df, 'dataset/test_set')
+    pickle.dump(test_features, open('dataset/test_features.pkl', 'wb'))
+    val_features = extract_sift_features_from_df(val_df, 'dataset/val_set')
+    pickle.dump(val_features, open('dataset/val_features.pkl', 'wb'))
+else:
+    train_features = pickle.load(open('dataset/train_features.pkl', 'rb'))
+    val_features = pickle.load(open('dataset/val_features.pkl', 'rb'))
+
 
 n_clusters = 1000
 
-if not os.path.exists('dataset/dictionary.npy') or force_recompute:
+if not os.path.exists('dataset/dictionary.pkl') or force_recompute_bow:
     dictionary = MiniBatchKMeans(n_clusters=n_clusters, random_state=0)
     dictionary.fit(np.concatenate(train_features))
-    np.save('dataset/dictionary.npy', dictionary)
+    pickle.dump(dictionary, open('dataset/dictionary.pkl', 'wb'))
 else:
-    dictionary = np.load('dataset/dictionary.npy', allow_pickle=True)
-    
+    dictionary = pickle.load(open('dataset/dictionary.pkl', 'rb'))
+
+
+# %%
 train_bow = extract_bag_of_words(train_features, dictionary)
-test_bow = extract_bag_of_words(test_features, dictionary)
+del train_features
 val_bow = extract_bag_of_words(val_features, dictionary)
+del val_features
+
+# %%
+# SVM
+clf = SVC()
+clf.fit(train_bow, train_df.iloc[:, 1], )
+train_pred = clf.predict(train_bow)
+val_pred = clf.predict(val_bow)
+# save to file
+pickle.dump(train_pred, open('dataset/svm_train_pred.pkl', 'wb'))
+pickle.dump(val_pred, open('dataset/svm_val_pred.pkl', 'wb'))
+
+
+
+
+train_acc = accuracy_score(train_df.iloc[:, 1], train_pred)
+val_acc = accuracy_score(val_df.iloc[:, 1], val_pred)
+
+print(f'SVM Train Accuracy: {train_acc:.3f}, Val Accuracy: {val_acc:.3f}')
+
+# %% [markdown]
+# ----
+# # <center>Playground
+
+# %%
+# extract sift from 1/4 of the images in the training set
+#train_14_features = extract_sift_features_from_df(train_df.iloc[::4], 'dataset/train_set')
+
+# %%
+# extract bow from 1/4 of the images in the training set
+#dictionary = MiniBatchKMeans(n_clusters=1000, random_state=0)
+#ictionary.fit(np.concatenate(train_14_features))
+#train_14_bow = extract_bag_of_words(train_14_features, dictionary)
+
+# %%
+# visualize the bow of the first image
+plt.bar(range(len(train_14_bow[0])), train_14_bow[0])
+plt.xlabel('Visual Word Index')
+plt.ylabel('Frequency')
+plt.title('Bag of Words')
+plt.show()
 
