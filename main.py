@@ -450,12 +450,12 @@ class SSL_RandomErasing(torch.nn.Module):
         )
 
     def forward(self, x):
-        x1 = self.conv1(x)
-        x2 = self.conv2(x1)
-        x3 = self.conv3(x2)
-        x4 = self.conv4(x3)
-        x5 = self.conv5(x4)
-
+        x1 = self.encoder.conv1(x)
+        x2 = self.encoder.conv2(x1)
+        x3 = self.encoder.conv3(x2)
+        x4 = self.encoder.conv4(x3)
+        x5 = self.encoder.conv5(x4)
+        
         x = self.upconv1(x5)
         x = self.upconv2(x + x4)
         x = self.upconv3(x + x3)
