@@ -132,8 +132,9 @@ class FoodDataset(Dataset):
 
 transform = transforms.Compose([
     transforms.Resize((128, 128)),
+    transforms.Grayscale(num_output_channels=1),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
+    # transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
 ])
 
 augmentation = transforms.Compose([
@@ -142,7 +143,8 @@ augmentation = transforms.Compose([
     transforms.RandomAffine(degrees=90, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=30),
     transforms.RandomAdjustSharpness(2, p=0.5),
     transforms.RandomAutocontrast(0.5),
-    transforms.RandomEqualize(0.5)
+    transforms.RandomEqualize(0.5),
+
 ])
 aug_transform = transforms.Compose([
     augmentation,
@@ -222,6 +224,77 @@ class tinyNet(Module):
 
 
 # %%
+class tinyNetGS(Module):
+    def __init__(self):
+        super(tinyNetGS, self).__init__()
+        self.conv1 = Sequential(
+            Conv2d(1, 8, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.conv2 = Sequential(
+            Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(64),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.conv3 = Sequential(
+            Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(128),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        self.conv4 = Sequential(
+            Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(128, 172, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(172),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+
+        self.conv5 = Sequential(
+            Conv2d(172, 172, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(172, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        self.fc1 = Sequential(
+            Linear(32*4*4, 256),
+            Dropout(.2),
+            GELU()
+        )
+
+        self.fc2 = Sequential(
+            Linear(256, 251),
+            GELU()
+        )
+    
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.conv5(x)
+        x = x.view(-1, 32*4*4)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        return x
+
+
+# %%
 def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
     train_loss = []
     val_loss = []
@@ -269,7 +342,6 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
     except Exception as e:
         print(e)
         print('No best model found, training from scratch...')
-        return
         
     
     
@@ -342,7 +414,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
     pbar.close()
 
 # %%
-model = tinyNet().to(device)
+model = tinyNetGS().to(device)
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 experiment_name = 'tinyNetv1'
