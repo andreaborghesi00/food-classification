@@ -19,20 +19,23 @@
 #
 
 # %%
+
 import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.nn import Conv2d, MaxPool2d, Linear, ReLU, BatchNorm2d, Dropout, Flatten, Sequential, Module, GELU, LeakyReLU, BatchNorm2d
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import pandas as pd
 import pickle
 import cv2
+import gc
 
 
+from torch.nn import Conv2d, MaxPool2d, Linear, ReLU, BatchNorm2d, Dropout, Flatten, Sequential, Module, GELU, LeakyReLU, BatchNorm2d
+from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.metrics import confusion_matrix
@@ -49,6 +52,10 @@ from sklearn.metrics import accuracy_score
     
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# %%
+# %reload_ext tensorboard
+# %tensorboard --logdir={experiment_name}
 
 # %%
 if not os.path.exists('dataset'):
@@ -135,7 +142,7 @@ augmentation = transforms.Compose([
     transforms.RandomAffine(degrees=90, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=30),
     transforms.RandomAdjustSharpness(2, p=0.5),
     transforms.RandomAutocontrast(0.5),
-    transforms.RandomEqualize(0.5),
+    transforms.RandomEqualize(0.5)
 ])
 aug_transform = transforms.Compose([
     augmentation,
@@ -156,106 +163,14 @@ val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
 # # <center>Neural Networks
 
 # %%
-class simple_CNN(torch.nn.Module):
+class tinyNet(Module):
     def __init__(self):
-        super(simple_CNN, self).__init__()
-        self.conv1 = torch.nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
-        self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.pool = torch.nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
-        self.fc1 = torch.nn.Linear(64*8*8, 256)  # 8*8 is the size of the image after 4 maxpooling layers
-        self.fc2 = torch.nn.Linear(256, 251)
-        self.gelu = torch.nn.GELU()
-
-    def forward(self, x):
-        x = self.pool(self.gelu(self.conv1(x)))
-        x = self.pool(self.gelu(self.conv2(x)))
-        x = self.pool(self.gelu(self.conv3(x)))
-        x = self.pool(x)  # Additional pooling layer
-        x = x.view(-1, 64*8*8)
-        x = self.gelu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-
-# %%
-class CosoNet(nn.Module): # the initial weights are random
-    def __init__(self):
-        super(CosoNet, self).__init__()
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 128, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(128),
-            nn.Conv2d(128, 128, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(128),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(128, 256, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(256),
-            nn.Conv2d(256, 256, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(256),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(256, 512, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(512),
-            nn.Conv2d(512, 512, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(512),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.conv4 = nn.Sequential(
-            nn.Conv2d(512, 734, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(734),
-            nn.Conv2d(734, 734, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(734),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.fc4 = nn.Sequential(
-            nn.Linear(2936, 2048),
-            nn.Dropout(.5),
-            nn.LeakyReLU(),
-        )
-
-        self.fc5 = nn.Sequential(
-            nn.Linear(2048, 1024),
-            nn.Dropout(.5),
-            nn.LeakyReLU()
-        )
-
-        self.fc6 = nn.Linear(1024, 251)
-        
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = x.view(x.shape[0], -1)
-        x = self.fc4(x)
-        x = self.fc5(x)
-        x = self.fc6(x)
-        return x
-
-
-# %%
-class simple_coso_CNN(Module):
-    def __init__(self):
-        super(simple_coso_CNN, self).__init__()
+        super(tinyNet, self).__init__()
         self.conv1 = Sequential(
             Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -263,6 +178,7 @@ class simple_coso_CNN(Module):
             Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(64),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -270,6 +186,7 @@ class simple_coso_CNN(Module):
             Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(128),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -278,6 +195,7 @@ class simple_coso_CNN(Module):
             Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(128, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -304,32 +222,81 @@ class simple_coso_CNN(Module):
 
 
 # %%
-def train(model, train_dl, val_dl, optimizer, criterion, epochs):
+def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
     train_loss = []
     val_loss = []
     train_acc = []
     val_acc = []
+    pbar = tqdm(total=epochs)
+    n_iter = 0
+    best_acc = 0
+    best_running_acc = 0
+    # ------------------------------ MODEL LOADING ------------------------------
+    
+    try:
+        checkpoint = torch.load(os.path.join('models', 'best_' + best_experiment_name + '.pth'))
+        best_model = checkpoint['model']
+        best_optimizer = checkpoint['optimizer']
+        best_criterion = checkpoint['criterion']
+        start_epoch = checkpoint['epoch'] + 1
+        best_acc = checkpoint['best_acc']
+        
+        print('Best Model loaded, evaluating...')
+        best_model.to(device)
+        best_model.eval()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for i, data in enumerate(val_dl):
+                inputs, labels = data
+                inputs, labels = inputs.to(device), labels.to(device)
+
+                outputs = best_model(inputs)
+                loss = best_criterion(outputs, labels)
+
+                running_loss += loss.item()
+
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+            print(f'Best model Loss: {running_loss/len(test_dl):.3f}, Test Acc: {100*correct/total:.3f}%')
+            best_acc = 100*correct/total
+        del best_model, best_criterion, best_optimizer, checkpoint
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+    except Exception as e:
+        print(e)
+        print('No best model found, training from scratch...')
+        return
+        
+    
+    
     for epoch in range(epochs):
+        writer.add_scalar("epoch", epoch, n_iter)
         model.train()
         running_loss = 0.0
         correct = 0
         total = 0
-        for i, data in tqdm(enumerate(train_dl)):
+        
+        # ------------------------------ TRAINING LOOP ------------------------------
+        for i, data in enumerate(train_dl):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
 
             optimizer.zero_grad()
-            
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            
             running_loss += loss.item()
             
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
+            writer.add_scalar("train", loss.item(), n_iter)
+            n_iter += 1
             
         train_loss.append(running_loss/len(train_dl))
         train_acc.append(100*correct/total)
@@ -338,6 +305,8 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
         running_loss = 0.0
         correct = 0
         total = 0
+        
+        # ------------------------------ VALIDATION LOOP ------------------------------
         with torch.no_grad():
             for i, data in enumerate(val_dl):
                 inputs, labels = data
@@ -351,22 +320,38 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
+                writer.add_scalar("val", loss.item(), n_iter)
         
+        # ------------------------------ PRINTING AND MODEL SAVING ------------------------------
+        
+        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc: {best_running_acc:.3f}%')
         val_loss.append(running_loss/len(val_dl))
         val_acc.append(100*correct/total)
-        
-        print(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {val_loss[-1]:.3f}, Val Acc: {val_acc[-1]:.3f}%')
-
+        if val_acc[-1] > best_running_acc:
+            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc beated, saving model')
+            best_running_acc = val_acc[-1]
+            checkpoint = {
+                'model': model,
+                'optimizer': optimizer,
+                'criterion': criterion,
+                'epoch': epoch,
+                'best_acc': best_acc
+            }
+            torch.save(checkpoint, os.path.join('models', 'best_' + best_experiment_name + '.pth'))
+        pbar.update(1)
+    pbar.close()
 
 # %%
-model = simple_coso_CNN().to(device)
+model = tinyNet().to(device)
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-epochs = 10
+experiment_name = 'tinyNetv1'
+writer = SummaryWriter('runs/'+experiment_name)
+epochs = 100
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
-train(model, train_dl, val_dl, optimizer, criterion, epochs)
+train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, 'test', device)
 
 
 # %%
