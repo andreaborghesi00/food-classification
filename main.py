@@ -136,7 +136,6 @@ augmentation = transforms.Compose([
     transforms.RandomAdjustSharpness(2, p=0.5),
     transforms.RandomAutocontrast(0.5),
     transforms.RandomEqualize(0.5),
-    transforms.RandomAffine(degrees=30, translate=(0.2, 0.2), scale=(0.8, 1.2), shear=0)
 ])
 aug_transform = transforms.Compose([
     augmentation,
@@ -147,9 +146,9 @@ train_ds = FoodDataset(train_df, 'dataset/train_set', aug_transform)
 test_ds = FoodDataset(test_df, 'dataset/test_set', transform)
 val_ds = FoodDataset(val_df, 'dataset/val_set', transform)
 
-train_dl = DataLoader(train_ds, batch_size=256, shuffle=True, num_workers=8)
-test_dl = DataLoader(test_ds, batch_size=256, shuffle=False, num_workers=8)
-val_dl = DataLoader(val_ds, batch_size=256, shuffle=False, num_workers=8)
+train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
+test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
+val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
 
 
 # %% [markdown]
@@ -310,7 +309,6 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
     val_loss = []
     train_acc = []
     val_acc = []
-    pbar = tqdm(total=epochs)
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
@@ -354,8 +352,6 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
         
-        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%')
-        pbar.update(1)
         val_loss.append(running_loss/len(val_dl))
         val_acc.append(100*correct/total)
         
