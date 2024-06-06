@@ -155,9 +155,9 @@ train_ds = FoodDataset(train_df, 'dataset/train_set', aug_transform)
 test_ds = FoodDataset(test_df, 'dataset/test_set', transform)
 val_ds = FoodDataset(val_df, 'dataset/val_set', transform)
 
-train_dl = DataLoader(train_ds, batch_size=512, shuffle=True, num_workers=8)
-test_dl = DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=8)
-val_dl = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=8)
+train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
+test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
+val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
 
 
 # %% [markdown]
@@ -166,59 +166,59 @@ val_dl = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=8)
 
 # %%
 class tinyNet(Module):
-    def __init__(self):
+    def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
         super(tinyNet, self).__init__()
         self.conv1 = Sequential(
-            Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
+            Conv2d(3, c1_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
+            Conv2d(c1_filters, c2_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c2_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
         self.conv2 = Sequential(
-            Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c2_filters, c2_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(64),
+            Conv2d(c2_filters, c3_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c3_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
         self.conv3 = Sequential(
-            Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c3_filters, c3_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(128),
+            Conv2d(c3_filters, c4_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c4_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.conv4 = Sequential(
-            Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c4_filters, c4_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(128, 172, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(172),
+            Conv2d(c4_filters, c5_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c5_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.conv5 = Sequential(
-            Conv2d(172, 172, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c5_filters, c5_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(172, 32, kernel_size=3, stride=1, padding=1),
+            Conv2d(c5_filters, 32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.fc1 = Sequential(
-            Linear(32*4*4, 256),
+            Linear(32*4*4, fc1_units),
             Dropout(.2),
             GELU()
         )
 
         self.fc2 = Sequential(
-            Linear(256, 251),
+            Linear(fc1_units, 251),
             GELU()
         )
     
@@ -235,7 +235,7 @@ class tinyNet(Module):
 
 
 # %%
-def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
+def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
     train_loss = []
     val_loss = []
     train_acc = []
@@ -302,6 +302,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+            scheduler.step()
             running_loss += loss.item()
             
             _, predicted = torch.max(outputs.data, 1)
@@ -352,6 +353,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
             torch.save(checkpoint, os.path.join('models', 'best_' + experiment_name + '.pth'))
         pbar.update(1)
     pbar.close()
+    return val_acc
 
 # %%
 model = tinyNet().to(device)
@@ -359,7 +361,8 @@ criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 experiment_name = 'tinyNetv1'
 writer = SummaryWriter('runs/'+experiment_name)
-epochs = 100
+epochs = 30
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
@@ -368,6 +371,7 @@ train(model = model,
       val_dl = val_dl,
       optimizer = optimizer,
       criterion = criterion,
+      scheduler = scheduler,
       epochs = epochs,
       writer = writer,
       experiment_name = experiment_name,
@@ -518,7 +522,7 @@ plt.imshow(noisy_ds.__getitem__(5)[0].permute(1, 2, 0))
 # %%
 def train_ssl(model, noisy_dl, clean_dl, optimizer, loss, epochs):
     model.train()
-    
+    pbar = tqdm(total=epochs*len(noisy_dl))
     for epoch in range(epochs):
         running_loss = 0.0
         for noisy, clean in zip(noisy_dl, clean_dl):
@@ -533,8 +537,11 @@ def train_ssl(model, noisy_dl, clean_dl, optimizer, loss, epochs):
             loss_out.backward()
             optimizer.step()
             running_loss += loss_out.item()
+            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Loss: {loss_out.item():.3f}')
+            pbar.update(1)
         print(f'Epoch: {epoch+1}/{epochs}, Loss: {running_loss/len(noisy_dl):.3f}')
-
+    # save the model
+    # torch.save(model.state_dict(), 'models/ssl/last_ssl.pth')
 
 
 # %%
@@ -542,10 +549,22 @@ ssl_model = SSL_RandomErasing().to(device)
 ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
 ssl_loss = torch.nn.MSELoss()
 
-train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 100)
+train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 1)
 
 # save the model
-torch.save(ssl_model, 'models/ssl/ssl_model_1.pth')
+
+
+# %%
+torch.save(ssl_model.state_dict(), 'models/ssl/ssl_model_1.pth')
+
+# %%
+
+# %%
+ssl_model.get('encoder.conv1.0.weight')
+
+# %%
+for child in ssl_model.keys():
+    print(child)
 
 # %%
 # evaluation of the ssl model, let's print some images
@@ -575,8 +594,19 @@ clean.shape
 
 # %%
 # take the encoder part of the ssl model
+ssl_model = SSL_RandomErasing().to(device)
+ssl_model.load_state_dict(torch.load('models/ssl/ssl_model_1.pth'))
+tNet = tinyNet().to(device)
+tNet = ssl_model.encoder
 
-model = SSL_RandomErasing().encoder
+# %%
+criterion = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(tNet.parameters(), lr=0.001)
+experiment_name = 'tinyNetv2'
+writer = SummaryWriter('runs/'+experiment_name)
+epochs = 40
+
+train(tNet, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, experiment_name, device)
 
 
 # %% [markdown]
@@ -781,7 +811,7 @@ class FoodBowCNN(nn.Module):
 
 
 # %%
-def train(model, train_dl, val_dl, optimizer, criterion, epochs):
+def bow_train(model, train_dl, val_dl, optimizer, criterion, epochs):
     train_loss = []
     val_loss = []
     train_acc = []
@@ -843,6 +873,110 @@ print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 train(model, train_bow_dl, val_bow_dl, optimizer, criterion, epochs)
 
+
+# %% [markdown]
+# ----
+# # <center> Hyperparameter tuning
+
+# %%
+import optuna
+from optuna.pruners import BasePruner
+
+class MaxParameterPruner(BasePruner):
+    def __init__(self, max_params):
+        self.max_params = max_params
+
+    def prune(self, study, trial):
+            # Define the hyperparameters to tune
+        c1_filters = trial.suggest_int('num_filters1', 8, 32)
+        c2_filters = trial.suggest_int('num_filters2', 16, 64)
+        c3_filters = trial.suggest_int('num_filters3', 32, 128)
+        c4_filters = trial.suggest_int('num_filters4', 64, 256)
+        c5_filters = trial.suggest_int('num_filters5', 64, 256)
+        fc1_units = trial.suggest_int('fc1_units', 128, 512)
+
+        # Create the model with the given hyperparameters
+        model = tinyNet(c1_filters, c2_filters, c3_filters, c4_filters, c5_filters, fc1_units).to(device)
+
+        # Calculate the number of parameters
+        num_params = sum(p.numel() for p in model.parameters())
+
+        # If the number of parameters exceeds 1 million, return a large negative value
+        if num_params > self.max_params:
+            study.set_user_attr('num_params', num_params)
+            return optuna.exceptions.TrialPruned()
+
+
+def objective(trial):
+    # Define the hyperparameters to tune
+    c1_filters = trial.suggest_int('num_filters1', 8, 32)
+    c2_filters = trial.suggest_int('num_filters2', 16, 64)
+    c3_filters = trial.suggest_int('num_filters3', 32, 128)
+    c4_filters = trial.suggest_int('num_filters4', 64, 256)
+    c5_filters = trial.suggest_int('num_filters5', 64, 256)
+    fc1_units = trial.suggest_int('fc1_units', 128, 512)
+
+    # Create the model with the given hyperparameters
+
+    model = tinyNet(c1_filters, c2_filters, c3_filters, c4_filters, c5_filters, fc1_units).to(device)
+
+    # Calculate the number of parameters
+
+    train_ds = FoodDataset(get_fraction_of_data(train_df, 0.1), 'dataset/train_set', aug_transform)
+    val_ds = FoodDataset(get_fraction_of_data(val_df, 0.1), 'dataset/val_set', transform)
+
+    train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
+    val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = torch.nn.CrossEntropyLoss()
+    epochs = 15
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
+    experiment_name = 'tinyNetHT'
+    writer = SummaryWriter('runs/'+experiment_name)
+
+
+    accuracy = train(model=model,
+                     train_dl=train_dl, 
+                     val_dl=val_dl, 
+                     optimizer=optimizer, 
+                     criterion=criterion, 
+                     scheduler=scheduler,
+                     epochs=epochs, 
+                     writer=writer, 
+                     experiment_name=experiment_name, 
+                     best_experiment_name='tinyNetv2', 
+                     device=device)
+
+    return accuracy
+
+def get_fraction_of_data(df, fraction, stratified=True):
+    if stratified:
+        _, train_df = train_test_split(df, test_size=fraction, stratify=df['label'])
+    else:
+        _, train_df = train_test_split(df, test_size=fraction)
+    # return DataLoader(FoodDataset(df.iloc[train_df], 'dataset/train_set', transform), batch_size=128, shuffle=True, num_workers=8)
+    return train_df
+
+
+# %%
+get_fraction_of_data(train_df, 0.1).head(4)
+
+
+# %%
+def run_trial(trial):
+    try:
+        accuracy = objective(trial)
+        return accuracy
+    except Exception as e:
+        raise optuna.exceptions.TrialPruned()
+
+
+# %%
+study = optuna.create_study(direction='maximize', study_name='tinyNetHT')
+study.optimize(objective, n_trials=100)
+
+study.best_params
 
 # %% [markdown]
 # ----
