@@ -517,19 +517,24 @@ img_name = ssl_ds.df.iloc[idx, 0]
 
 mean = torch.tensor([0.485, 0.456, 0.406])
 std = torch.tensor([0.229, 0.224, 0.225])
-clean_image = clean_image * std[:, None, None] + mean[:, None, None]
+clean_image = clean_image * std[:, None, None] + mean[:, None, None] 
 noisy_image = noisy_image * std[:, None, None] + mean[:, None, None]
 
 
 clean_image = torch.clamp(clean_image, 0, 1)
 noisy_image = torch.clamp(noisy_image, 0, 1)
 
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
 
-ax1 = plt.subplot(1, 2, 1)
-ax2 = plt.subplot(1, 2, 2)
 ax1.imshow(clean_image.permute(1, 2, 0))
+ax1.set_title('Clean Image')
+ax1.axis('off')
+
 ax2.imshow(noisy_image.permute(1, 2, 0))
-print(f'showing image {img_name}, original on the left, noisy on the right')
+ax2.set_title('Noisy Image')
+ax2.axis('off')
+
+print(f'showing image {img_name}')
 plt.show()
 
 # %%
@@ -551,12 +556,7 @@ def train_ssl(model, ssl_dl, optimizer, loss, epochs, device):
             loss_out.backward()
             optimizer.step()
             running_loss += loss_out.item()
-            
-            # Update progress bar
             progress_bar.set_postfix({'Loss': running_loss / (progress_bar.n + 1)})
-        
-        # Print average loss for the epoch
-        print(f'Epoch {epoch+1}/{epochs}, Loss: {running_loss/len(ssl_dl):.3f}')
 
 
 # %%
@@ -571,28 +571,46 @@ train_ssl(model=ssl_model,
           epochs=100,
           device=device)
 
-
 # %%
-# evaluation of the ssl model, let's print some images
-ssl_model.eval()
+idx = np.random.randint(0, len(ssl_ds))
+clean_image, noisy_image = ssl_ds[idx]
 
-clean = clean_ds.__getitem__(10)[0].unsqueeze(0)
-noisy = noisy_ds.__getitem__(10)[0].unsqueeze(0)
+img_name = ssl_ds.df.iloc[idx, 0]
 
-out = ssl_model(noisy.to(device))
+mean = torch.tensor([0.485, 0.456, 0.406])
+std = torch.tensor([0.229, 0.224, 0.225])
+clean_image = clean_image * std[:, None, None] + mean[:, None, None]
+noisy_image = noisy_image * std[:, None, None] + mean[:, None, None]
 
-fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-ax[0].imshow(noisy[0].permute(1, 2, 0).cpu().detach().numpy())
-ax[0].set_title('Noisy')
-ax[1].imshow(out[0].permute(1, 2, 0).cpu().detach().numpy())
-ax[1].set_title('Reconstructed')
-ax[2].imshow(clean[0].permute(1, 2, 0).cpu().numpy())
-ax[2].set_title('Clean')
+clean_image = torch.clamp(clean_image, 0, 1)
+noisy_image = torch.clamp(noisy_image, 0, 1)
 
+with torch.no_grad():
+    noisy_image_tensor = noisy_image.unsqueeze(0).to(device)
+    reconstructed_image = ssl_model(noisy_image_tensor).squeeze(0).cpu()
+
+reconstructed_image = reconstructed_image * std[:, None, None] + mean[:, None, None]
+reconstructed_image = torch.clamp(reconstructed_image, 0, 1)
+
+fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+ax1.imshow(clean_image.permute(1, 2, 0))
+ax1.set_title('Clean')
+ax1.axis('off')
+
+ax2.imshow(noisy_image.permute(1, 2, 0))
+ax2.set_title('Noisy')
+ax2.axis('off')
+
+ax3.imshow(reconstructed_image.permute(1, 2, 0))
+ax3.set_title('Reconstructed')
+ax3.axis('off')
+
+plt.tight_layout()
+print(f'Showing image {img_name}')
 plt.show()
 
 # %%
-clean.shape
+torch.save(ssl_model, 'models/ssl_model.pth')
 
 # %% [markdown]
 # ----
