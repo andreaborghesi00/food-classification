@@ -259,6 +259,7 @@ class simple_coso_CNN(Module):
         self.conv1 = Sequential(
             Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
             GELU(),
+            GELU(),
             Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
             GELU(),
@@ -266,6 +267,7 @@ class simple_coso_CNN(Module):
         )
         self.conv2 = Sequential(
             Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
+            GELU(),
             GELU(),
             Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(64),
@@ -275,6 +277,7 @@ class simple_coso_CNN(Module):
         self.conv3 = Sequential(
             Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
             GELU(),
+            GELU(),
             Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(128),
             GELU(),
@@ -283,6 +286,7 @@ class simple_coso_CNN(Module):
 
         self.conv4 = Sequential(
             Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+            GELU(),
             GELU(),
             Conv2d(128, 32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
@@ -368,9 +372,10 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
         total = 0
         
         # ------------------------------ TRAINING LOOP ------------------------------
-        for i, data in enumerate(train_dl):
+        for i, data in tqdm(enumerate(train_dl)):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
+
 
             optimizer.zero_grad()
             outputs = model(inputs)
