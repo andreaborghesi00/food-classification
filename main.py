@@ -22,6 +22,9 @@
 import os
 import torch
 import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.nn import Conv2d, MaxPool2d, Linear, ReLU, BatchNorm2d, Dropout, Flatten, Sequential, Module, GELU, LeakyReLU, BatchNorm2d
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -35,6 +38,7 @@ from sklearn.cluster import MiniBatchKMeans
 from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
+from torchsummary import summary
 
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
@@ -119,6 +123,12 @@ class FoodDataset(Dataset):
 
 transform = transforms.Compose([
     transforms.Resize((128, 128)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    transforms.RandomAffine(degrees=90, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=30),
+    transforms.RandomAdjustSharpness(2, p=0.5),
+    transforms.RandomAutocontrast(0.5),
+    transforms.RandomEqualize(0.5),
     transforms.ToTensor(),
     transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
 ])
@@ -160,12 +170,62 @@ class simple_CNN(torch.nn.Module):
 
 
 # %%
+class simple_coso_CNN(Module):
+    def __init__(self):
+        super(simple_coso_CNN, self).__init__()
+        self.conv1 = Sequential(
+            Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
+            Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.conv2 = Sequential(
+            Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
+            Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.conv3 = Sequential(
+            Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
+            Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        self.conv4 = Sequential(
+            Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+            Conv2d(128, 32, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.fc1 = Sequential(
+            Linear(32*8*8, 256),
+            Dropout(.2),
+            GELU()
+        )
+
+        self.fc2 = Sequential(
+            Linear(256, 251),
+            GELU()
+        )
+    
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = x.view(-1, 32*8*8)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        return x
+
+
+# %%
 def train(model, train_dl, val_dl, optimizer, criterion, epochs):
     train_loss = []
     val_loss = []
     train_acc = []
     val_acc = []
-
+    pbar = tqdm(total=epochs)
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
@@ -208,7 +268,9 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
-                
+        
+        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%')
+        pbar.update(1)
         val_loss.append(running_loss/len(val_dl))
         val_acc.append(100*correct/total)
         
@@ -216,7 +278,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
 
 
 # %%
-model = simple_CNN().to(device)
+model = simple_coso_CNN().to(device)
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 epochs = 10
