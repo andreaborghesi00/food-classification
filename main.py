@@ -160,105 +160,11 @@ val_dl = DataLoader(val_ds, batch_size=256, shuffle=False, num_workers=8)
 # # <center>Neural Networks
 
 # %%
-class simple_CNN(torch.nn.Module):
+class tinyNet(Module):
     def __init__(self):
-        super(simple_CNN, self).__init__()
-        self.conv1 = torch.nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
-        self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.pool = torch.nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
-        self.fc1 = torch.nn.Linear(64*8*8, 256)  # 8*8 is the size of the image after 4 maxpooling layers
-        self.fc2 = torch.nn.Linear(256, 251)
-        self.gelu = torch.nn.GELU()
-
-    def forward(self, x):
-        x = self.pool(self.gelu(self.conv1(x)))
-        x = self.pool(self.gelu(self.conv2(x)))
-        x = self.pool(self.gelu(self.conv3(x)))
-        x = self.pool(x)  # Additional pooling layer
-        x = x.view(-1, 64*8*8)
-        x = self.gelu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-
-# %%
-class CosoNet(nn.Module): # the initial weights are random
-    def __init__(self):
-        super(CosoNet, self).__init__()
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 128, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(128),
-            nn.Conv2d(128, 128, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(128),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(128, 256, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(256),
-            nn.Conv2d(256, 256, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(256),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(256, 512, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(512),
-            nn.Conv2d(512, 512, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(512),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.conv4 = nn.Sequential(
-            nn.Conv2d(512, 734, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(734),
-            nn.Conv2d(734, 734, 3, 1, 1),
-            nn.LeakyReLU(),
-            nn.BatchNorm2d(734),
-            nn.MaxPool2d(2, 2)
-        )
-
-        self.fc4 = nn.Sequential(
-            nn.Linear(2936, 2048),
-            nn.Dropout(.5),
-            nn.LeakyReLU(),
-        )
-
-        self.fc5 = nn.Sequential(
-            nn.Linear(2048, 1024),
-            nn.Dropout(.5),
-            nn.LeakyReLU()
-        )
-
-        self.fc6 = nn.Linear(1024, 251)
-        
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = x.view(x.shape[0], -1)
-        x = self.fc4(x)
-        x = self.fc5(x)
-        x = self.fc6(x)
-        return x
-
-
-# %%
-class simple_coso_CNN(Module):
-    def __init__(self):
-        super(simple_coso_CNN, self).__init__()
+        super(tinyNet, self).__init__()
         self.conv1 = Sequential(
             Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
-            GELU(),
             GELU(),
             Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
@@ -268,7 +174,6 @@ class simple_coso_CNN(Module):
         self.conv2 = Sequential(
             Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            GELU(),
             Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(64),
             GELU(),
@@ -276,7 +181,6 @@ class simple_coso_CNN(Module):
         )
         self.conv3 = Sequential(
             Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
-            GELU(),
             GELU(),
             Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(128),
@@ -286,7 +190,6 @@ class simple_coso_CNN(Module):
 
         self.conv4 = Sequential(
             Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
-            GELU(),
             GELU(),
             Conv2d(128, 32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
@@ -327,7 +230,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
     # ------------------------------ MODEL LOADING ------------------------------
     
     try:
-        checkpoint = torch.load(best_experiment_name)
+        checkpoint = torch.load(os.path.join('models', best_experiment_name))
         best_model = checkpoint['model']
         best_criterion = checkpoint['loss']
         #best_scheduler = checkpoint['scheduler']
@@ -372,10 +275,9 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
         total = 0
         
         # ------------------------------ TRAINING LOOP ------------------------------
-        for i, data in tqdm(enumerate(train_dl)):
+        for i, data in enumerate(train_dl):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
-
 
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -431,13 +333,13 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
                 'criterion_state_dict': criterion.state_dict(),
                 #'scheduler_state_dict': scheduler.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict()
-            }, 'best_'+experiment_name)
+            }, os.path.join('models', 'best_' + best_experiment_name)
 
 # %%
-model = simple_coso_CNN().to(device)
+model = tinyNet().to(device)
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-experiment_name = 'simple_coso_CNN'
+experiment_name = 'tinyNetv1'
 writer = SummaryWriter('runs/'+experiment_name)
 epochs = 100
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
