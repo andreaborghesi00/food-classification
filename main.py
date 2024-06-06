@@ -154,9 +154,9 @@ train_ds = FoodDataset(train_df, 'dataset/train_set', aug_transform)
 test_ds = FoodDataset(test_df, 'dataset/test_set', transform)
 val_ds = FoodDataset(val_df, 'dataset/val_set', transform)
 
-train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
-test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
-val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
+train_dl = DataLoader(train_ds, batch_size=512, shuffle=True, num_workers=8)
+test_dl = DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=8)
+val_dl = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=8)
 
 
 # %% [markdown]
@@ -200,7 +200,6 @@ class tinyNet(Module):
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
-
 
         self.conv5 = Sequential(
             Conv2d(172, 172, kernel_size=3, stride=1, padding='same'),
@@ -363,7 +362,16 @@ epochs = 100
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
-train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, 'test', device)
+train(model = model,
+      train_dl = train_dl,
+      val_dl = val_dl,
+      optimizer = optimizer,
+      criterion = criterion,
+      epochs = epochs,
+      writer = writer,
+      experiment_name = experiment_name,
+      best_experiment_name = 'tinyNetv1',
+      device = device)
 
 
 # %%
@@ -491,31 +499,28 @@ noisy_aug_transform = transforms.Compose([
 ])
 
 noisy_ds = FoodDataset(train_df, 'dataset/train_set', noisy_aug_transform)
-noisy_dl = DataLoader(noisy_ds, batch_size=128, shuffle=True, num_workers=8)
+noisy_dl = DataLoader(noisy_ds, batch_size=128, shuffle=False, num_workers=8)
 
 clean_ds = FoodDataset(train_df, 'dataset/train_set', transform)
-clean_dl = DataLoader(clean_ds, batch_size=128, shuffle=True, num_workers=8)
+clean_dl = DataLoader(clean_ds, batch_size=128, shuffle=False, num_workers=8)
 
 
 # %%
 def train_ssl(model, noisy_dl, clean_dl, optimizer, loss, epochs):
     model.train()
-    pbar = tqdm(total=len(noisy_dl)*epochs)
     for epoch in range(epochs):
-        for noisy, clean in tqdm(zip(noisy_dl, clean_dl)):
-            noisy, _ = noisy
-            clean, _ = clean
-            noisy = noisy.to(device)
-            clean = clean.to(device)
+        running_loss = 0.0
+        for noisy, clean in zip(noisy_dl, clean_dl):
+            noisy = noisy[0].to(device)
+            clean = clean[0].to(device)
 
             optimizer.zero_grad()
             noisy_out = model(noisy)
             loss_out = loss(noisy_out, clean)
             loss_out.backward()
             optimizer.step()
-            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Loss: {loss_out.item():.3f}')
-            pbar.update(1)
-
+            running_loss += loss_out.item()
+        print(f'Epoch: {epoch+1}/{epochs}, Loss: {running_loss/len(noisy_dl):.3f}')
 
 
 # %%
@@ -523,7 +528,29 @@ ssl_model = SSL_RandomErasing().to(device)
 ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
 ssl_loss = torch.nn.MSELoss()
 
-train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 10)
+train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 100)
+
+# %%
+# evaluation of the ssl model, let's print some images
+ssl_model.eval()
+
+clean = clean_ds.__getitem__(10)[0].unsqueeze(0)
+noisy = noisy_ds.__getitem__(10)[0].unsqueeze(0)
+
+out = ssl_model(noisy.to(device))
+
+fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+ax[0].imshow(noisy[0].permute(1, 2, 0).cpu().detach().numpy())
+ax[0].set_title('Noisy')
+ax[1].imshow(out[0].permute(1, 2, 0).cpu().detach().numpy())
+ax[1].set_title('Reconstructed')
+ax[2].imshow(clean[0].permute(1, 2, 0).cpu().numpy())
+ax[2].set_title('Clean')
+
+plt.show()
+
+# %%
+clean.shape
 
 
 # %% [markdown]
