@@ -155,9 +155,9 @@ train_ds = FoodDataset(train_df, 'dataset/train_set', aug_transform)
 test_ds = FoodDataset(test_df, 'dataset/test_set', transform)
 val_ds = FoodDataset(val_df, 'dataset/val_set', transform)
 
-train_dl = DataLoader(train_ds, batch_size=512, shuffle=True, num_workers=8)
-test_dl = DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=8)
-val_dl = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=8)
+train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
+test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
+val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
 
 
 # %% [markdown]
@@ -166,59 +166,59 @@ val_dl = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=8)
 
 # %%
 class tinyNet(Module):
-    def __init__(self):
+    def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
         super(tinyNet, self).__init__()
         self.conv1 = Sequential(
-            Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
+            Conv2d(3, c1_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
+            Conv2d(c1_filters, c2_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c2_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
         self.conv2 = Sequential(
-            Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c2_filters, c2_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(64),
+            Conv2d(c2_filters, c3_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c3_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
         self.conv3 = Sequential(
-            Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c3_filters, c3_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(128),
+            Conv2d(c3_filters, c4_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c4_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.conv4 = Sequential(
-            Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c4_filters, c4_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(128, 172, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(172),
+            Conv2d(c4_filters, c5_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c5_filters),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.conv5 = Sequential(
-            Conv2d(172, 172, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c5_filters, c5_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(172, 32, kernel_size=3, stride=1, padding=1),
+            Conv2d(c5_filters, 32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.fc1 = Sequential(
-            Linear(32*4*4, 256),
+            Linear(32*4*4, fc1_units),
             Dropout(.2),
             GELU()
         )
 
         self.fc2 = Sequential(
-            Linear(256, 251),
+            Linear(fc1_units, 251),
             GELU()
         )
     
@@ -235,7 +235,7 @@ class tinyNet(Module):
 
 
 # %%
-def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
+def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
     train_loss = []
     val_loss = []
     train_acc = []
@@ -302,6 +302,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+            scheduler.step()
             running_loss += loss.item()
             
             _, predicted = torch.max(outputs.data, 1)
@@ -352,6 +353,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
             torch.save(checkpoint, os.path.join('models', 'best_' + experiment_name + '.pth'))
         pbar.update(1)
     pbar.close()
+    return val_acc
 
 # %%
 model = tinyNet().to(device)
@@ -359,7 +361,8 @@ criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 experiment_name = 'tinyNetv1'
 writer = SummaryWriter('runs/'+experiment_name)
-epochs = 100
+epochs = 30
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
@@ -368,6 +371,7 @@ train(model = model,
       val_dl = val_dl,
       optimizer = optimizer,
       criterion = criterion,
+      scheduler = scheduler,
       epochs = epochs,
       writer = writer,
       experiment_name = experiment_name,
@@ -543,7 +547,7 @@ from tqdm import tqdm
 
 def train_ssl(model, ssl_dl, optimizer, loss, epochs, device):
     model.train()
-    
+    pbar = tqdm(total=epochs*len(noisy_dl))
     for epoch in range(epochs):
         running_loss = 0.0
         progress_bar = tqdm(ssl_dl, desc=f'Epoch {epoch+1}/{epochs}', unit='batch')
@@ -843,7 +847,7 @@ class FoodBowCNN(nn.Module):
 
 
 # %%
-def train(model, train_dl, val_dl, optimizer, criterion, epochs):
+def bow_train(model, train_dl, val_dl, optimizer, criterion, epochs):
     train_loss = []
     val_loss = []
     train_acc = []
@@ -905,6 +909,110 @@ print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 train(model, train_bow_dl, val_bow_dl, optimizer, criterion, epochs)
 
+
+# %% [markdown]
+# ----
+# # <center> Hyperparameter tuning
+
+# %%
+import optuna
+from optuna.pruners import BasePruner
+
+class MaxParameterPruner(BasePruner):
+    def __init__(self, max_params):
+        self.max_params = max_params
+
+    def prune(self, study, trial):
+            # Define the hyperparameters to tune
+        c1_filters = trial.suggest_int('num_filters1', 8, 32)
+        c2_filters = trial.suggest_int('num_filters2', 16, 64)
+        c3_filters = trial.suggest_int('num_filters3', 32, 128)
+        c4_filters = trial.suggest_int('num_filters4', 64, 256)
+        c5_filters = trial.suggest_int('num_filters5', 64, 256)
+        fc1_units = trial.suggest_int('fc1_units', 128, 512)
+
+        # Create the model with the given hyperparameters
+        model = tinyNet(c1_filters, c2_filters, c3_filters, c4_filters, c5_filters, fc1_units).to(device)
+
+        # Calculate the number of parameters
+        num_params = sum(p.numel() for p in model.parameters())
+
+        # If the number of parameters exceeds 1 million, return a large negative value
+        if num_params > self.max_params:
+            study.set_user_attr('num_params', num_params)
+            return optuna.exceptions.TrialPruned()
+
+
+def objective(trial):
+    # Define the hyperparameters to tune
+    c1_filters = trial.suggest_int('num_filters1', 8, 32)
+    c2_filters = trial.suggest_int('num_filters2', 16, 64)
+    c3_filters = trial.suggest_int('num_filters3', 32, 128)
+    c4_filters = trial.suggest_int('num_filters4', 64, 256)
+    c5_filters = trial.suggest_int('num_filters5', 64, 256)
+    fc1_units = trial.suggest_int('fc1_units', 128, 512)
+
+    # Create the model with the given hyperparameters
+
+    model = tinyNet(c1_filters, c2_filters, c3_filters, c4_filters, c5_filters, fc1_units).to(device)
+
+    # Calculate the number of parameters
+
+    train_ds = FoodDataset(get_fraction_of_data(train_df, 0.1), 'dataset/train_set', aug_transform)
+    val_ds = FoodDataset(get_fraction_of_data(val_df, 0.1), 'dataset/val_set', transform)
+
+    train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
+    val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = torch.nn.CrossEntropyLoss()
+    epochs = 15
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
+    experiment_name = 'tinyNetHT'
+    writer = SummaryWriter('runs/'+experiment_name)
+
+
+    accuracy = train(model=model,
+                     train_dl=train_dl, 
+                     val_dl=val_dl, 
+                     optimizer=optimizer, 
+                     criterion=criterion, 
+                     scheduler=scheduler,
+                     epochs=epochs, 
+                     writer=writer, 
+                     experiment_name=experiment_name, 
+                     best_experiment_name='tinyNetv2', 
+                     device=device)
+
+    return accuracy
+
+def get_fraction_of_data(df, fraction, stratified=True):
+    if stratified:
+        _, train_df = train_test_split(df, test_size=fraction, stratify=df['label'])
+    else:
+        _, train_df = train_test_split(df, test_size=fraction)
+    # return DataLoader(FoodDataset(df.iloc[train_df], 'dataset/train_set', transform), batch_size=128, shuffle=True, num_workers=8)
+    return train_df
+
+
+# %%
+get_fraction_of_data(train_df, 0.1).head(4)
+
+
+# %%
+def run_trial(trial):
+    try:
+        accuracy = objective(trial)
+        return accuracy
+    except Exception as e:
+        raise optuna.exceptions.TrialPruned()
+
+
+# %%
+study = optuna.create_study(direction='maximize', study_name='tinyNetHT')
+study.optimize(objective, n_trials=100)
+
+study.best_params
 
 # %% [markdown]
 # ----
