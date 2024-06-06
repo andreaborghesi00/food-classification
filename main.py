@@ -409,7 +409,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
                 'epoch': epoch,
                 'best_acc': best_acc
             }
-            torch.save(checkpoint, os.path.join('models', 'best_' + best_experiment_name + '.pth'))
+            torch.save(checkpoint, os.path.join('models', 'best_' + experiment_name + '.pth'))
         pbar.update(1)
     pbar.close()
 
