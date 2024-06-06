@@ -19,6 +19,7 @@
 #
 
 # %%
+
 import os
 import torch
 import torch.nn as nn
@@ -30,6 +31,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pickle
 import cv2
+import gc
+
 
 from torch.nn import Conv2d, MaxPool2d, Linear, ReLU, BatchNorm2d, Dropout, Flatten, Sequential, Module, GELU, LeakyReLU, BatchNorm2d
 from torch.utils.tensorboard import SummaryWriter
@@ -227,6 +230,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
     pbar = tqdm(total=epochs)
     n_iter = 0
     best_acc = 0
+    best_running_acc = 0
     # ------------------------------ MODEL LOADING ------------------------------
     
     try:
@@ -259,6 +263,8 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
             print(f'Best model Loss: {running_loss/len(test_dl):.3f}, Test Acc: {100*correct/total:.3f}%')
             best_acc = 100*correct/total
         del best_model, best_criterion, best_optimizer, checkpoint
+        torch.cuda.empty_cache()
+        gc.collect()
         
     except Exception as e:
         print(e)
@@ -318,12 +324,12 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
         
         # ------------------------------ PRINTING AND MODEL SAVING ------------------------------
         
-        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, ')
-        pbar.update(1)
+        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc: {best_running_acc:.3f}%')
         val_loss.append(running_loss/len(val_dl))
         val_acc.append(100*correct/total)
-        if val_acc[-1] > best_acc:
-            best_acc = val_acc[-1]
+        if val_acc[-1] > best_running_acc:
+            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc beated, saving model')
+            best_running_acc = val_acc[-1]
             checkpoint = {
                 'model': model,
                 'optimizer': optimizer,
@@ -332,6 +338,7 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
                 'best_acc': best_acc
             }
             torch.save(checkpoint, os.path.join('models', 'best_' + best_experiment_name + '.pth'))
+        pbar.update(1)
     pbar.close()
 
 # %%
