@@ -230,15 +230,13 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
     # ------------------------------ MODEL LOADING ------------------------------
     
     try:
-        checkpoint = torch.load(os.path.join('models', best_experiment_name))
+        checkpoint = torch.load(os.path.join('models', 'best_' + best_experiment_name + '.pth'))
         best_model = checkpoint['model']
-        best_criterion = checkpoint['loss']
-        #best_scheduler = checkpoint['scheduler']
         best_optimizer = checkpoint['optimizer']
-        best_model.load_state_dict(checkpoint['model_state_dict'])
-        best_criterion.load_state_dict(checkpoint['criterion_state_dict'])
-        #best_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        best_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        best_criterion = checkpoint['criterion']
+        start_epoch = checkpoint['epoch'] + 1
+        best_acc = checkpoint['best_acc']
+        
         print('Best Model loaded, evaluating...')
         best_model.to(device)
         best_model.eval()
@@ -260,10 +258,12 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
                 correct += (predicted == labels).sum().item()
             print(f'Best model Loss: {running_loss/len(test_dl):.3f}, Test Acc: {100*correct/total:.3f}%')
             best_acc = 100*correct/total
-        del best_model, best_criterion, best_scheduler, best_optimizer, checkpoint
+        del best_model, best_criterion, best_optimizer, checkpoint
         
-    except:
+    except Exception as e:
+        print(e)
         print('No best model found, training from scratch...')
+        return
         
     
     
@@ -318,22 +318,21 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
         
         # ------------------------------ PRINTING AND MODEL SAVING ------------------------------
         
-        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%')
+        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, ')
         pbar.update(1)
         val_loss.append(running_loss/len(val_dl))
         val_acc.append(100*correct/total)
         if val_acc[-1] > best_acc:
             best_acc = val_acc[-1]
-            torch.save({
+            checkpoint = {
                 'model': model,
-                'loss': criterion,
-                #'scheduler': scheduler,
                 'optimizer': optimizer,
-                'model_state_dict': model.state_dict(),
-                'criterion_state_dict': criterion.state_dict(),
-                #'scheduler_state_dict': scheduler.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict()
-            }, os.path.join('models', 'best_' + best_experiment_name)
+                'criterion': criterion,
+                'epoch': epoch,
+                'best_acc': best_acc
+            }
+            torch.save(checkpoint, os.path.join('models', 'best_' + best_experiment_name + '.pth'))
+    pbar.close()
 
 # %%
 model = tinyNet().to(device)
@@ -345,7 +344,7 @@ epochs = 100
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
-train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, 'best_'+experiment_name, device)
+train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, 'test', device)
 
 
 # %%
