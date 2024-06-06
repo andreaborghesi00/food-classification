@@ -24,7 +24,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.nn import Conv2d, MaxPool2d, Linear, ReLU, BatchNorm2d, Dropout, Flatten, Sequential, Module, GELU, LeakyReLU, BatchNorm2d
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -32,7 +31,8 @@ import pandas as pd
 import pickle
 import cv2
 
-
+from torch.nn import Conv2d, MaxPool2d, Linear, ReLU, BatchNorm2d, Dropout, Flatten, Sequential, Module, GELU, LeakyReLU, BatchNorm2d
+from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.metrics import confusion_matrix
@@ -49,6 +49,10 @@ from sklearn.metrics import accuracy_score
     
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# %%
+# %reload_ext tensorboard
+# %tensorboard --logdir={experiment_name}
 
 # %%
 if not os.path.exists('dataset'):
@@ -135,8 +139,7 @@ augmentation = transforms.Compose([
     transforms.RandomAffine(degrees=90, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=30),
     transforms.RandomAdjustSharpness(2, p=0.5),
     transforms.RandomAutocontrast(0.5),
-    transforms.RandomEqualize(0.5),
-    transforms.RandomAffine(degrees=30, translate=(0.2, 0.2), scale=(0.8, 1.2), shear=0)
+    transforms.RandomEqualize(0.5)
 ])
 aug_transform = transforms.Compose([
     augmentation,
@@ -255,26 +258,34 @@ class simple_coso_CNN(Module):
         super(simple_coso_CNN, self).__init__()
         self.conv1 = Sequential(
             Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
+            GELU(),
             Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
         self.conv2 = Sequential(
             Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
+            GELU(),
             Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(64),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
         self.conv3 = Sequential(
             Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
+            GELU(),
             Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(128),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.conv4 = Sequential(
             Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+            GELU(),
             Conv2d(128, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -293,6 +304,7 @@ class simple_coso_CNN(Module):
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.conv3(x)
+        x = self.conv4(x)
         x = x.view(-1, 32*8*8)
         x = self.fc1(x)
         x = self.fc2(x)
@@ -300,33 +312,78 @@ class simple_coso_CNN(Module):
 
 
 # %%
-def train(model, train_dl, val_dl, optimizer, criterion, epochs):
+def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
     train_loss = []
     val_loss = []
     train_acc = []
     val_acc = []
     pbar = tqdm(total=epochs)
+    n_iter = 0
+    best_acc = 0
+    # ------------------------------ MODEL LOADING ------------------------------
+    
+    try:
+        checkpoint = torch.load(best_experiment_name)
+        best_model = checkpoint['model']
+        best_criterion = checkpoint['loss']
+        #best_scheduler = checkpoint['scheduler']
+        best_optimizer = checkpoint['optimizer']
+        best_model.load_state_dict(checkpoint['model_state_dict'])
+        best_criterion.load_state_dict(checkpoint['criterion_state_dict'])
+        #best_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        best_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print('Best Model loaded, evaluating...')
+        best_model.to(device)
+        best_model.eval()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for i, data in enumerate(val_dl):
+                inputs, labels = data
+                inputs, labels = inputs.to(device), labels.to(device)
+
+                outputs = best_model(inputs)
+                loss = best_criterion(outputs, labels)
+
+                running_loss += loss.item()
+
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+            print(f'Best model Loss: {running_loss/len(test_dl):.3f}, Test Acc: {100*correct/total:.3f}%')
+            best_acc = 100*correct/total
+        del best_model, best_criterion, best_scheduler, best_optimizer, checkpoint
+        
+    except:
+        print('No best model found, training from scratch...')
+        
+    
+    
     for epoch in range(epochs):
+        writer.add_scalar("epoch", epoch, n_iter)
         model.train()
         running_loss = 0.0
         correct = 0
         total = 0
+        
+        # ------------------------------ TRAINING LOOP ------------------------------
         for i, data in enumerate(train_dl):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
-            
+
             optimizer.zero_grad()
-            
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            
             running_loss += loss.item()
             
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
+            writer.add_scalar("train", loss.item(), n_iter)
+            n_iter += 1
             
         train_loss.append(running_loss/len(train_dl))
         train_acc.append(100*correct/total)
@@ -335,6 +392,8 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
         running_loss = 0.0
         correct = 0
         total = 0
+        
+        # ------------------------------ VALIDATION LOOP ------------------------------
         with torch.no_grad():
             for i, data in enumerate(val_dl):
                 inputs, labels = data
@@ -348,24 +407,38 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs):
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
+                writer.add_scalar("val", loss.item(), n_iter)
+        
+        # ------------------------------ PRINTING AND MODEL SAVING ------------------------------
         
         pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%')
         pbar.update(1)
         val_loss.append(running_loss/len(val_dl))
         val_acc.append(100*correct/total)
-        
-        print(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {val_loss[-1]:.3f}, Val Acc: {val_acc[-1]:.3f}%')
-
+        if val_acc[-1] > best_acc:
+            best_acc = val_acc[-1]
+            torch.save({
+                'model': model,
+                'loss': criterion,
+                #'scheduler': scheduler,
+                'optimizer': optimizer,
+                'model_state_dict': model.state_dict(),
+                'criterion_state_dict': criterion.state_dict(),
+                #'scheduler_state_dict': scheduler.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict()
+            }, 'best_'+experiment_name)
 
 # %%
 model = simple_coso_CNN().to(device)
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-epochs = 10
+experiment_name = 'simple_coso_CNN'
+writer = SummaryWriter('runs/'+experiment_name)
+epochs = 100
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
-train(model, train_dl, val_dl, optimizer, criterion, epochs)
+train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, 'best_'+experiment_name, device)
 
 
 # %%
