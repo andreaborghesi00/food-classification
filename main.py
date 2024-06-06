@@ -544,8 +544,7 @@ ssl_loss = torch.nn.MSELoss()
 
 train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 100)
 
-# save the model
-torch.save(ssl_model, 'models/ssl/ssl_model_1.pth')
+#torch.save(ssl_model, 'models/ssl/ssl_model_1.pth')
 
 # %%
 # evaluation of the ssl model, let's print some images
@@ -576,7 +575,8 @@ clean.shape
 # %%
 # take the encoder part of the ssl model
 
-tinynet = SSL_RandomErasing().encoder.to(device)
+ssl_model = torch.load('models/ssl/ssl_model.pth')
+tinynet = ssl_model.encoder.to(device)
 
 train(tinynet, train_dl, val_dl, optimizer, criterion, 100, writer, 'tinynet_ssl', 'tinynet_ssl', device)
 
