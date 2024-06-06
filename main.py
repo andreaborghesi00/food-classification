@@ -479,69 +479,88 @@ class SSL_RandomErasing(torch.nn.Module):
 
 # %%
 class SSL_Dataset(Dataset):
-    def __init__(self, clean_ds, noisy_ds):
-        self.clean_ds = clean_ds
-        self.noisy_ds = noisy_ds
+    def __init__(self, df):
+        self.df = df
+        self.transform = transforms.Compose([
+            transforms.Resize((128, 128)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
+        ])
+        self.noisy_transform = transforms.Compose([
+            transforms.RandomErasing(p=1, scale=(0.1, 0.3), ratio=(0.3, 3), value=0, inplace=False),
+        ])
         
     def __len__(self):
-        return len(self.clean_ds)
+        return len(self.df)
     
     def __getitem__(self, idx):
-        clean = self.clean_ds[idx][0]
-        noisy = self.noisy_ds[idx][0]
-        return clean, noisy
+        img_name = self.df.iloc[idx, 0]
+        image = Image.open(img_name)
+        image = self.transform(image)
+        noisy_image = self.noisy_transform(image)
+        return image, noisy_image
 
 
 # %%
-noisy_augmentation = transforms.Compose([
-    transforms.RandomErasing(p=1, scale=(0.1, 0.3), ratio=(0.3, 3), value=0, inplace=False)
-])
-
-noisy_aug_transform = transforms.Compose([
-    transform,
-    noisy_augmentation
-])
-
-# take 10% of the dataset for this task, stratified
 img_paths = train_df['image']
-labels = train_df['label']
+img_paths = img_paths.apply(lambda x: 'dataset/train_set/' + x)
+img_paths = pd.concat([img_paths, test_df['image'].apply(lambda x: 'dataset/test_set/' + x)])
 
-#_, ssl_img, _, ssl_labels = train_test_split(img_paths, labels, test_size=0.1, stratify=labels)
 
-#ssl_df = pd.DataFrame({'image': ssl_img, 'label': ssl_labels})
-noisy_ds = FoodDataset(train_df, 'dataset/train_set', noisy_aug_transform)
-clean_ds = FoodDataset(train_df, 'dataset/train_set', transform)
-
-noisy_dl = DataLoader(noisy_ds, batch_size=128, shuffle=False, num_workers=8)
-clean_dl = DataLoader(clean_ds, batch_size=128, shuffle=False, num_workers=8)
+ssl_df = pd.DataFrame({'image': img_paths})
+ssl_ds = SSL_Dataset(ssl_df)
+ssl_dl = DataLoader(ssl_ds, batch_size=512, shuffle=False, num_workers=8)
 
 # %%
-plt.imshow(noisy_ds.__getitem__(5)[0].permute(1, 2, 0))
+idx = np.random.randint(0, len(ssl_ds))
+clean_image, noisy_image = ssl_ds[idx]
 
+
+img_name = ssl_ds.df.iloc[idx, 0]
+
+
+mean = torch.tensor([0.485, 0.456, 0.406])
+std = torch.tensor([0.229, 0.224, 0.225])
+clean_image = clean_image * std[:, None, None] + mean[:, None, None] 
+noisy_image = noisy_image * std[:, None, None] + mean[:, None, None]
+
+
+clean_image = torch.clamp(clean_image, 0, 1)
+noisy_image = torch.clamp(noisy_image, 0, 1)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+
+ax1.imshow(clean_image.permute(1, 2, 0))
+ax1.set_title('Clean Image')
+ax1.axis('off')
+
+ax2.imshow(noisy_image.permute(1, 2, 0))
+ax2.set_title('Noisy Image')
+ax2.axis('off')
+
+print(f'showing image {img_name}')
+plt.show()
 
 # %%
-def train_ssl(model, noisy_dl, clean_dl, optimizer, loss, epochs):
+from tqdm import tqdm
+
+def train_ssl(model, ssl_dl, optimizer, loss, epochs, device):
     model.train()
     pbar = tqdm(total=epochs*len(noisy_dl))
     for epoch in range(epochs):
         running_loss = 0.0
-        for noisy, clean in zip(noisy_dl, clean_dl):
-            noisy = noisy
-            clean = clean
-            noisy = noisy[0].to(device)
-            clean = clean[0].to(device)
-
+        progress_bar = tqdm(ssl_dl, desc=f'Epoch {epoch+1}/{epochs}', unit='batch')
+        
+        for data in progress_bar:
+            clean, noisy = data
+            clean, noisy = clean.to(device), noisy.to(device)
             optimizer.zero_grad()
             noisy_out = model(noisy)
             loss_out = loss(noisy_out, clean)
             loss_out.backward()
             optimizer.step()
             running_loss += loss_out.item()
-            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Loss: {loss_out.item():.3f}')
-            pbar.update(1)
-        print(f'Epoch: {epoch+1}/{epochs}, Loss: {running_loss/len(noisy_dl):.3f}')
-    # save the model
-    # torch.save(model.state_dict(), 'models/ssl/last_ssl.pth')
+            progress_bar.set_postfix({'Loss': running_loss / (progress_bar.n + 1)})
 
 
 # %%
@@ -549,44 +568,53 @@ ssl_model = SSL_RandomErasing().to(device)
 ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
 ssl_loss = torch.nn.MSELoss()
 
-train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 1)
-
-# save the model
-
-
-# %%
-torch.save(ssl_model.state_dict(), 'models/ssl/ssl_model_1.pth')
-
-# %%
+train_ssl(model=ssl_model,
+          ssl_dl=ssl_dl,
+          optimizer=ssl_optimizer,
+          loss=ssl_loss,
+          epochs=100,
+          device=device)
 
 # %%
-ssl_model.get('encoder.conv1.0.weight')
+idx = np.random.randint(0, len(ssl_ds))
+clean_image, noisy_image = ssl_ds[idx]
 
-# %%
-for child in ssl_model.keys():
-    print(child)
+img_name = ssl_ds.df.iloc[idx, 0]
 
-# %%
-# evaluation of the ssl model, let's print some images
-ssl_model.eval()
+mean = torch.tensor([0.485, 0.456, 0.406])
+std = torch.tensor([0.229, 0.224, 0.225])
+clean_image = clean_image * std[:, None, None] + mean[:, None, None]
+noisy_image = noisy_image * std[:, None, None] + mean[:, None, None]
 
-clean = clean_ds.__getitem__(10)[0].unsqueeze(0)
-noisy = noisy_ds.__getitem__(10)[0].unsqueeze(0)
+clean_image = torch.clamp(clean_image, 0, 1)
+noisy_image = torch.clamp(noisy_image, 0, 1)
 
-out = ssl_model(noisy.to(device))
+with torch.no_grad():
+    noisy_image_tensor = noisy_image.unsqueeze(0).to(device)
+    reconstructed_image = ssl_model(noisy_image_tensor).squeeze(0).cpu()
 
-fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-ax[0].imshow(noisy[0].permute(1, 2, 0).cpu().detach().numpy())
-ax[0].set_title('Noisy')
-ax[1].imshow(out[0].permute(1, 2, 0).cpu().detach().numpy())
-ax[1].set_title('Reconstructed')
-ax[2].imshow(clean[0].permute(1, 2, 0).cpu().numpy())
-ax[2].set_title('Clean')
+reconstructed_image = reconstructed_image * std[:, None, None] + mean[:, None, None]
+reconstructed_image = torch.clamp(reconstructed_image, 0, 1)
 
+fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+ax1.imshow(clean_image.permute(1, 2, 0))
+ax1.set_title('Clean')
+ax1.axis('off')
+
+ax2.imshow(noisy_image.permute(1, 2, 0))
+ax2.set_title('Noisy')
+ax2.axis('off')
+
+ax3.imshow(reconstructed_image.permute(1, 2, 0))
+ax3.set_title('Reconstructed')
+ax3.axis('off')
+
+plt.tight_layout()
+print(f'Showing image {img_name}')
 plt.show()
 
 # %%
-clean.shape
+torch.save(ssl_model, 'models/ssl_model.pth')
 
 # %% [markdown]
 # ----
@@ -594,19 +622,22 @@ clean.shape
 
 # %%
 # take the encoder part of the ssl model
+
+# load the entire model ssl
 ssl_model = SSL_RandomErasing().to(device)
-ssl_model.load_state_dict(torch.load('models/ssl/ssl_model_1.pth'))
-tNet = tinyNet().to(device)
-tNet = ssl_model.encoder
+ssl_model.load_state_dict(ssl_model.state_dict())
+tinynet = ssl_model.encoder
+
+optimizer = torch.optim.Adam(tinynet.parameters(), lr=0.001)
+criterion = torch.nn.CrossEntropyLoss()
+epochs = 100
+writer = SummaryWriter('runs/tinynet_ssl')
+
+
+train(tinynet, train_dl, val_dl, optimizer, criterion, epochs, writer, 'tinynet_ssl', 'tinynet_ssl', device)
 
 # %%
-criterion = torch.nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(tNet.parameters(), lr=0.001)
-experiment_name = 'tinyNetv2'
-writer = SummaryWriter('runs/'+experiment_name)
-epochs = 40
-
-train(tNet, train_dl, val_dl, optimizer, criterion, epochs, writer, experiment_name, experiment_name, device)
+plot_confusion_matrix(tinynet, val_dl)
 
 
 # %% [markdown]
