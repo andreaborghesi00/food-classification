@@ -132,9 +132,8 @@ class FoodDataset(Dataset):
 
 transform = transforms.Compose([
     transforms.Resize((128, 128)),
-    transforms.Grayscale(num_output_channels=1),
     transforms.ToTensor(),
-    # transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
+    transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
 ])
 
 augmentation = transforms.Compose([
@@ -228,7 +227,7 @@ class tinyNetGS(Module):
     def __init__(self):
         super(tinyNetGS, self).__init__()
         self.conv1 = Sequential(
-            Conv2d(1, 8, kernel_size=3, stride=1, padding='same'),
+            Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(32),
@@ -449,6 +448,182 @@ def plot_confusion_matrix(net, test_loader):
     plt.show()
 
 plot_confusion_matrix(model, val_dl)
+
+
+# %% [markdown]
+# ----
+# # <center>Self Supervised Learning
+
+# %%
+class SSL_RandomErasing(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Encoder
+        self.conv1 = Sequential(
+            Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.conv2 = Sequential(
+            Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(64),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.conv3 = Sequential(
+            Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(128),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        self.conv4 = Sequential(
+            Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(128, 172, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(172),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+
+        self.conv5 = Sequential(
+            Conv2d(172, 172, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(172, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        # Decoder
+        self.upconv1 = Sequential(
+            Conv2d(32, 172, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(172, 172, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(172),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv2 = Sequential(
+            Conv2d(172, 128, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(128),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv3 = Sequential(
+            Conv2d(128, 64, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(64),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv4 = Sequential(
+            Conv2d(64, 32, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(32),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv5 = Sequential(
+            Conv2d(32, 8, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(8, 3, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(3),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+    def forward(self, x):
+        x1 = self.conv1(x)
+        x2 = self.conv2(x1)
+        x3 = self.conv3(x2)
+        x4 = self.conv4(x3)
+        x5 = self.conv5(x4)
+
+        x = self.upconv1(x5)
+        x = self.upconv2(x + x4)
+        x = self.upconv3(x + x3)
+        x = self.upconv4(x + x2)
+        x = self.upconv5(x + x1)
+        return x
+
+        
+
+# %%
+class SSL_Dataset(Dataset):
+    def __init__(self, clean_ds, noisy_ds):
+        self.clean_ds = clean_ds
+        self.noisy_ds = noisy_ds
+        
+    def __len__(self):
+        return len(self.clean_ds)
+    
+    def __getitem__(self, idx):
+        clean = self.clean_ds[idx][0]
+        noisy = self.noisy_ds[idx][0]
+        return clean, noisy
+
+
+# %%
+noisy_augmentation = transforms.Compose([
+    transforms.RandomErasing(p=1, scale=(0.1, 0.3), ratio=(0.3, 3), value=0, inplace=False)
+])
+
+noisy_aug_transform = transforms.Compose([
+    transform,
+    noisy_augmentation
+])
+
+noisy_ds = FoodDataset(train_df, 'dataset/train_set', noisy_aug_transform)
+noisy_dl = DataLoader(noisy_ds, batch_size=128, shuffle=True, num_workers=8)
+
+clean_ds = FoodDataset(train_df, 'dataset/train_set', transform)
+clean_dl = DataLoader(clean_ds, batch_size=128, shuffle=True, num_workers=8)
+
+
+# %%
+def train_ssl(model, noisy_dl, clean_dl, optimizer, loss, epochs):
+    model.train()
+    pbar = tqdm(total=len(noisy_dl)*epochs)
+    for epoch in range(epochs):
+        for noisy, clean in tqdm(zip(noisy_dl, clean_dl)):
+            noisy, _ = noisy
+            clean, _ = clean
+            noisy = noisy.to(device)
+            clean = clean.to(device)
+
+            optimizer.zero_grad()
+            noisy_out = model(noisy)
+            loss_out = loss(noisy_out, clean)
+            loss_out.backward()
+            optimizer.step()
+            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Loss: {loss_out.item():.3f}')
+            pbar.update(1)
+
+
+
+# %%
+ssl_model = SSL_RandomErasing().to(device)
+ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
+ssl_loss = torch.nn.MSELoss()
+
+train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 10)
 
 
 # %% [markdown]
