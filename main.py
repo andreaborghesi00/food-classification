@@ -576,7 +576,9 @@ clean.shape
 # %%
 # take the encoder part of the ssl model
 
-model = SSL_RandomErasing().encoder
+tinynet = SSL_RandomErasing().encoder.to(device)
+
+train(tinynet, train_dl, val_dl, optimizer, criterion, 100, writer, 'tinynet_ssl', 'tinynet_ssl', device)
 
 
 # %% [markdown]
