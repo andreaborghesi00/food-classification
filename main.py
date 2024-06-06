@@ -35,7 +35,9 @@ import cv2
 
 from torch.utils.data import Dataset, DataLoader
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.metrics import confusion_matrix
 from torchvision import transforms
+import seaborn as sns
 from PIL import Image
 from tqdm import tqdm
 from torchsummary import summary
@@ -133,7 +135,18 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
 ])
 
-train_ds = FoodDataset(train_df, 'dataset/train_set', transform)
+augmentation = transforms.Compose([
+    transforms.RandomHorizontalFlip(p=0.5), 
+    transforms.RandomResizedCrop(32, scale=(0.8, 1.0), ratio=(0.9, 1.1)),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2), 
+    transforms.RandomAffine(degrees=30, translate=(0.2, 0.2), scale=(0.8, 1.2), shear=0)
+])
+aug_transform = transforms.Compose([
+    augmentation,
+    transform
+])
+
+train_ds = FoodDataset(train_df, 'dataset/train_set', aug_transform)
 test_ds = FoodDataset(test_df, 'dataset/test_set', transform)
 val_ds = FoodDataset(val_df, 'dataset/val_set', transform)
 
@@ -166,6 +179,76 @@ class simple_CNN(torch.nn.Module):
         x = x.view(-1, 64*8*8)
         x = self.gelu(self.fc1(x))
         x = self.fc2(x)
+        return x
+
+
+# %%
+class CosoNet(nn.Module): # the initial weights are random
+    def __init__(self):
+        super(CosoNet, self).__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 128, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(128),
+            nn.Conv2d(128, 128, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(128),
+            nn.MaxPool2d(2, 2)
+        )
+
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(128, 256, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(256),
+            nn.Conv2d(256, 256, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(256),
+            nn.MaxPool2d(2, 2)
+        )
+
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(256, 512, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(512),
+            nn.Conv2d(512, 512, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(512),
+            nn.MaxPool2d(2, 2)
+        )
+
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(512, 734, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(734),
+            nn.Conv2d(734, 734, 3, 1, 1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(734),
+            nn.MaxPool2d(2, 2)
+        )
+
+        self.fc4 = nn.Sequential(
+            nn.Linear(2936, 2048),
+            nn.Dropout(.5),
+            nn.LeakyReLU(),
+        )
+
+        self.fc5 = nn.Sequential(
+            nn.Linear(2048, 1024),
+            nn.Dropout(.5),
+            nn.LeakyReLU()
+        )
+
+        self.fc6 = nn.Linear(1024, 251)
+        
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = x.view(x.shape[0], -1)
+        x = self.fc4(x)
+        x = self.fc5(x)
+        x = self.fc6(x)
         return x
 
 
@@ -286,6 +369,31 @@ print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
 train(model, train_dl, val_dl, optimizer, criterion, epochs)
+
+
+# %%
+def plot_confusion_matrix(net, test_loader):
+    
+    net.eval()
+    gt = []
+    pred = []
+    with torch.no_grad():
+        for el, labels in test_loader:
+            el = el.to(device)
+            labels = labels.to(device)
+            out = net(el)
+            _, predicted = torch.max(out, 1)
+            gt.extend(labels.cpu().numpy())
+            pred.extend(predicted.cpu().numpy())
+
+    cm = confusion_matrix(gt, pred)
+    plt.figure(figsize=(40, 40))
+    sns.heatmap(cm, annot=True, fmt='g', cmap='viridis', xticklabels=class_list['name'].values, yticklabels=class_list['name'].values)
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.show()
+
+plot_confusion_matrix(model, val_dl)
 
 
 # %% [markdown]
