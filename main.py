@@ -164,7 +164,7 @@ val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
 # # <center>Neural Networks
 
 # %%
-class tinyNet(Module()):
+class tinyNet(Module):
     def __init__(self):
         super(tinyNet, self).__init__()
         self.conv1 = Sequential(
