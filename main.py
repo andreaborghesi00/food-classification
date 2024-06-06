@@ -409,50 +409,7 @@ class SSL_RandomErasing(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-        # Encoder
-        self.conv1 = Sequential(
-            Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-        self.conv2 = Sequential(
-            Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(64),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-        self.conv3 = Sequential(
-            Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(128),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-
-        self.conv4 = Sequential(
-            Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(128, 172, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(172),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-
-
-        self.conv5 = Sequential(
-            Conv2d(172, 172, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(172, 32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
+        self.encoder = tinyNet()
 
         # Decoder
         self.upconv1 = Sequential(
@@ -545,36 +502,38 @@ noisy_aug_transform = transforms.Compose([
 img_paths = train_df['image']
 labels = train_df['label']
 
-_, ssl_img, _, ssl_labels = train_test_split(img_paths, labels, test_size=0.1, stratify=labels)
+#_, ssl_img, _, ssl_labels = train_test_split(img_paths, labels, test_size=0.1, stratify=labels)
 
-ssl_df = pd.DataFrame({'image': ssl_img, 'label': ssl_labels})
-noisy_ds = FoodDataset(ssl_df, 'dataset/train_set', noisy_aug_transform)
-clean_ds = FoodDataset(ssl_df, 'dataset/train_set', transform)
+#ssl_df = pd.DataFrame({'image': ssl_img, 'label': ssl_labels})
+noisy_ds = FoodDataset(train_df, 'dataset/train_set', noisy_aug_transform)
+clean_ds = FoodDataset(train_df, 'dataset/train_set', transform)
 
 noisy_dl = DataLoader(noisy_ds, batch_size=128, shuffle=False, num_workers=8)
 clean_dl = DataLoader(clean_ds, batch_size=128, shuffle=False, num_workers=8)
 
 # %%
-plt.imshow(noisy_ds.__getitem__(5).permute(1, 2, 0))
+plt.imshow(noisy_ds.__getitem__(5)[0].permute(1, 2, 0))
 
 
 # %%
 def train_ssl(model, noisy_dl, clean_dl, optimizer, loss, epochs):
     model.train()
+    
     for epoch in range(epochs):
-        for noisy, clean in tqdm(zip(noisy_dl, clean_dl)):
-            noisy, _ = noisy
-            clean, _ = clean
-            noisy = noisy.to(device)
-            clean = clean.to(device)
+        running_loss = 0.0
+        for noisy, clean in zip(noisy_dl, clean_dl):
+            noisy = noisy
+            clean = clean
+            noisy = noisy[0].to(device)
+            clean = clean[0].to(device)
 
             optimizer.zero_grad()
             noisy_out = model(noisy)
             loss_out = loss(noisy_out, clean)
             loss_out.backward()
             optimizer.step()
-            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Loss: {loss_out.item():.3f}')
-            pbar.update(1)
+            running_loss += loss_out.item()
+        print(f'Epoch: {epoch+1}/{epochs}, Loss: {running_loss/len(noisy_dl):.3f}')
 
 
 
@@ -584,6 +543,9 @@ ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
 ssl_loss = torch.nn.MSELoss()
 
 train_ssl(ssl_model, noisy_dl, clean_dl, ssl_optimizer, ssl_loss, 100)
+
+# save the model
+torch.save(ssl_model, 'models/ssl/ssl_model_1.pth')
 
 # %%
 # evaluation of the ssl model, let's print some images
@@ -606,6 +568,15 @@ plt.show()
 
 # %%
 clean.shape
+
+# %% [markdown]
+# ----
+# # <center>Transfer Learning from SSL
+
+# %%
+# take the encoder part of the ssl model
+
+model = SSL_RandomErasing().encoder
 
 
 # %% [markdown]
