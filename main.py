@@ -196,65 +196,6 @@ class tinyNet(Module):
         self.conv4 = Sequential(
             Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(128, 32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-        self.fc1 = Sequential(
-            Linear(32*8*8, 256),
-            Dropout(.2),
-            GELU()
-        )
-
-        self.fc2 = Sequential(
-            Linear(256, 251),
-            GELU()
-        )
-    
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = x.view(-1, 32*8*8)
-        x = self.fc1(x)
-        x = self.fc2(x)
-        return x
-
-
-# %%
-class tinyNetGS(Module):
-    def __init__(self):
-        super(tinyNetGS, self).__init__()
-        self.conv1 = Sequential(
-            Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(32),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-        self.conv2 = Sequential(
-            Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(64),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-        self.conv3 = Sequential(
-            Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(128),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-
-        self.conv4 = Sequential(
-            Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
-            GELU(),
             Conv2d(128, 172, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(172),
             GELU(),
@@ -409,12 +350,12 @@ def train(model, train_dl, val_dl, optimizer, criterion, epochs, writer, experim
                 'epoch': epoch,
                 'best_acc': best_acc
             }
-            torch.save(checkpoint, os.path.join('models', 'best_' + best_experiment_name + '.pth'))
+            torch.save(checkpoint, os.path.join('models', 'best_' + experiment_name + '.pth'))
         pbar.update(1)
     pbar.close()
 
 # %%
-model = tinyNetGS().to(device)
+model = tinyNet().to(device)
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 experiment_name = 'tinyNetv1'
@@ -459,12 +400,13 @@ plot_confusion_matrix(model, val_dl)
 class SSL_RandomErasing(torch.nn.Module):
     def __init__(self):
         super().__init__()
+
         # Encoder
         self.conv1 = Sequential(
             Conv2d(3, 8, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(8, 32, kernel_size=3, stride=1, padding=1),
-            
+            BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -472,7 +414,7 @@ class SSL_RandomErasing(torch.nn.Module):
             Conv2d(32, 32, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            
+            BatchNorm2d(64),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -480,7 +422,7 @@ class SSL_RandomErasing(torch.nn.Module):
             Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            
+            BatchNorm2d(128),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -489,7 +431,7 @@ class SSL_RandomErasing(torch.nn.Module):
             Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(128, 172, kernel_size=3, stride=1, padding=1),
-            
+            BatchNorm2d(172),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -499,7 +441,7 @@ class SSL_RandomErasing(torch.nn.Module):
             Conv2d(172, 172, kernel_size=3, stride=1, padding='same'),
             GELU(),
             Conv2d(172, 32, kernel_size=3, stride=1, padding=1),
-            
+            BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
@@ -551,12 +493,12 @@ class SSL_RandomErasing(torch.nn.Module):
         )
 
     def forward(self, x):
-        x1 = self.conv1(x)
-        x2 = self.conv2(x1)
-        x3 = self.conv3(x2)
-        x4 = self.conv4(x3)
-        x5 = self.conv5(x4)
-
+        x1 = self.encoder.conv1(x)
+        x2 = self.encoder.conv2(x1)
+        x3 = self.encoder.conv3(x2)
+        x4 = self.encoder.conv4(x3)
+        x5 = self.encoder.conv5(x4)
+        
         x = self.upconv1(x5)
         x = self.upconv2(x + x4)
         x = self.upconv3(x + x3)
