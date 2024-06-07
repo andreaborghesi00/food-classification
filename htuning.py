@@ -378,11 +378,12 @@ def objective(trial):
 
     # Calculate the number of parameters
 
-    train_ds = FoodDataset(get_fraction_of_data(train_df, 0.1), 'dataset/train_set', aug_transform)
-    val_ds = FoodDataset(get_fraction_of_data(val_df, 0.1), 'dataset/val_set', transform)
+    #train_ds = FoodDataset(get_fraction_of_data(train_df, 0.3), 'dataset/train_set', transform)
+    train_ds = FoodDataset(train_df, 'dataset/train_set', transform)
+    val_ds = FoodDataset(val_df, 'dataset/val_set', transform)
 
-    train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
-    val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
+    train_dl = DataLoader(train_ds, batch_size=1024, shuffle=True, num_workers=8)
+    val_dl = DataLoader(val_ds, batch_size=1024, shuffle=False, num_workers=8)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     criterion = torch.nn.CrossEntropyLoss()

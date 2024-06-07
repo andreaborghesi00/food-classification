@@ -131,33 +131,32 @@ class FoodDataset(Dataset):
 
 # %%
 
-transform = transforms.Compose([
+transform_val = transforms.Compose([
     transforms.Resize((128, 128)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
 ])
 
-augmentation = transforms.Compose([
+augmentation_train = transforms.Compose([
+    transforms.Resize((128, 128)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
     transforms.RandomHorizontalFlip(),
     transforms.RandomVerticalFlip(),
-    transforms.RandomAffine(degrees=90, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=30),
-    transforms.RandomAdjustSharpness(2, p=0.5),
-    transforms.RandomAutocontrast(0.5),
-    transforms.RandomEqualize(0.5),
+    transforms.RandomAffine(degrees=90, translate=(0.1, 0.1)),
+    #transforms.RandomAdjustSharpness(2, p=0.5),
+    #transforms.RandomAutocontrast(0.5),
+    #transforms.RandomEqualize(0.5),
 
 ])
-aug_transform = transforms.Compose([
-    augmentation,
-    transform
-])
 
-train_ds = FoodDataset(train_df, 'dataset/train_set', aug_transform)
-test_ds = FoodDataset(test_df, 'dataset/test_set', transform)
-val_ds = FoodDataset(val_df, 'dataset/val_set', transform)
+train_ds = FoodDataset(train_df, 'dataset/train_set', augmentation_train)
+test_ds = FoodDataset(test_df, 'dataset/test_set', transform_val)
+val_ds = FoodDataset(val_df, 'dataset/val_set', transform_val)
 
-train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
-test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
-val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
+train_dl = DataLoader(train_ds, batch_size=1024, shuffle=True, num_workers=8)
+test_dl = DataLoader(test_ds, batch_size=1024, shuffle=False, num_workers=8)
+val_dl = DataLoader(val_ds, batch_size=1024, shuffle=False, num_workers=8)
 
 
 # %% [markdown]
@@ -354,15 +353,31 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
             torch.save(checkpoint, os.path.join('models', 'best_' + experiment_name + '.pth'))
         pbar.update(1)
     pbar.close()
+    
+    with open(os.path.join('models', experiment_name + '_train_loss.pkl'), 'wb') as f:
+        pickle.dump(train_loss, f)
+    with open(os.path.join('models', experiment_name + '_val_loss.pkl'), 'wb') as f:
+        pickle.dump(val_loss, f)
+    with open(os.path.join('models', experiment_name + '_train_acc.pkl'), 'wb') as f:
+        pickle.dump(train_acc, f)
+    with open(os.path.join('models', experiment_name + '_val_acc.pkl'), 'wb') as f:
+        pickle.dump(val_acc, f)
+    
     return val_acc
 
 # %%
-model = tinyNet().to(device)
+model = tinyNet(c1_filters= 22,
+                c2_filters= 32,
+                c3_filters= 64,
+                c4_filters= 80,
+                c5_filters= 172,
+                fc1_units= 500).to(device)
+
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-experiment_name = 'tinyNetv1'
+experiment_name = 'tinyNetv3'
 writer = SummaryWriter('runs/'+experiment_name)
-epochs = 30
+epochs = 150
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
@@ -375,8 +390,8 @@ train(model = model,
       scheduler = scheduler,
       epochs = epochs,
       writer = writer,
-      experiment_name = experiment_name,
-      best_experiment_name = 'tinyNetv1',
+      experiment_name = 'tinyNetv3',
+      best_experiment_name = 'tinyNetv3',
       device = device)
 
 
@@ -548,7 +563,8 @@ from tqdm import tqdm
 
 def train_ssl(model, ssl_dl, optimizer, loss, epochs, device):
     model.train()
-    pbar = tqdm(total=epochs*len(noisy_dl))
+    train_loss = []
+    pbar = tqdm(total=epochs*len(ssl_dl))
     for epoch in range(epochs):
         running_loss = 0.0
         progress_bar = tqdm(ssl_dl, desc=f'Epoch {epoch+1}/{epochs}', unit='batch')
@@ -562,7 +578,10 @@ def train_ssl(model, ssl_dl, optimizer, loss, epochs, device):
             loss_out.backward()
             optimizer.step()
             running_loss += loss_out.item()
+            train_loss.append(running_loss / (progress_bar.n + 1))
             progress_bar.set_postfix({'Loss': running_loss / (progress_bar.n + 1)})
+    with open(os.path.join('models', 'ssl_train_loss.pkl'), 'wb') as f:
+        pickle.dump(train_loss, f)
 
 
 # %%
