@@ -348,7 +348,8 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
                 'optimizer': optimizer,
                 'criterion': criterion,
                 'epoch': epoch,
-                'best_acc': best_acc
+                'best_acc': best_acc,
+                'scheduler': scheduler
             }
             torch.save(checkpoint, os.path.join('models', 'best_' + experiment_name + '.pth'))
         pbar.update(1)
@@ -538,6 +539,7 @@ ax2.imshow(noisy_image.permute(1, 2, 0))
 ax2.set_title('Noisy Image')
 ax2.axis('off')
 
+plt.tight_layout()
 print(f'showing image {img_name}')
 plt.show()
 
@@ -624,9 +626,13 @@ torch.save(ssl_model, 'models/ssl_model.pth')
 # take the encoder part of the ssl model
 
 # load the entire model ssl
-ssl_model = SSL_RandomErasing().to(device)
-ssl_model.load_state_dict(ssl_model.state_dict())
-tinynet = ssl_model.encoder
+
+# Load the state dictionary
+state_dict = torch.load('models/ssl_model.pth')
+ssl_model_ = SSL_RandomErasing().to(device)
+ssl_model_.load_state_dict(state_dict)
+
+tinynet = ssl_model_.encoder
 
 optimizer = torch.optim.Adam(tinynet.parameters(), lr=0.001)
 criterion = torch.nn.CrossEntropyLoss()
@@ -634,7 +640,7 @@ epochs = 100
 writer = SummaryWriter('runs/tinynet_ssl')
 
 
-train(tinynet, train_dl, val_dl, optimizer, criterion, epochs, writer, 'tinynet_ssl', 'tinynet_ssl', device)
+train(tinynet, train_dl, val_dl, optimizer, criterion, epochs, writer, 'tinynet_sslv2', 'tinynet_ssl', device)
 
 # %%
 plot_confusion_matrix(tinynet, val_dl)
