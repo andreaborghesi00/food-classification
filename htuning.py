@@ -423,6 +423,7 @@ def run_trial(trial):
         accuracy = objective(trial)
         return accuracy
     except Exception as e:
+        gc.collect()
         raise optuna.exceptions.TrialPruned()
     
 n_trials = 100
