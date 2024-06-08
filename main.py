@@ -375,7 +375,7 @@ model = tinyNet(c1_filters= 22,
 
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-experiment_name = 'tinyNetv3'
+experiment_name = 'tinyNetv4'
 writer = SummaryWriter('runs/'+experiment_name)
 epochs = 150
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
@@ -426,53 +426,54 @@ plot_confusion_matrix(model, val_dl)
 
 # %%
 class SSL_RandomErasing(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
         super().__init__()
+        
 
-        self.encoder = tinyNet()
+        self.encoder = tinyNet(c1_filters= c1_filters,
+                                c2_filters= c2_filters,
+                                c3_filters= c3_filters,
+                                c4_filters= c4_filters,
+                                c5_filters= c5_filters,
+                                fc1_units= fc1_units)
 
         # Decoder
-        self.upconv1 = Sequential(
-            Conv2d(32, 172, kernel_size=3, stride=1, padding='same'),
+        self.upconv1= Sequential(
+            Conv2d(32, c5_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(172, 172, kernel_size=3, stride=1, padding=1),
-            
+            Conv2d(c5_filters, c5_filters, kernel_size=3, stride=1, padding=1),
             GELU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         )
 
         self.upconv2 = Sequential(
-            Conv2d(172, 128, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c5_filters, c4_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
-            
+            Conv2d(c4_filters, c4_filters, kernel_size=3, stride=1, padding=1),
             GELU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         )
 
         self.upconv3 = Sequential(
-            Conv2d(128, 64, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c4_filters, c3_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
-            
+            Conv2d(c3_filters, c3_filters, kernel_size=3, stride=1, padding=1),
             GELU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         )
 
         self.upconv4 = Sequential(
-            Conv2d(64, 32, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c3_filters, c2_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
-            
+            Conv2d(c2_filters, c2_filters, kernel_size=3, stride=1, padding=1),
             GELU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         )
 
         self.upconv5 = Sequential(
-            Conv2d(32, 8, kernel_size=3, stride=1, padding='same'),
+            Conv2d(c2_filters, c1_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(8, 3, kernel_size=3, stride=1, padding=1),
-            
+            Conv2d(c1_filters, 3, kernel_size=3, stride=1, padding=1),
             GELU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         )
@@ -525,7 +526,7 @@ img_paths = pd.concat([img_paths, test_df['image'].apply(lambda x: 'dataset/test
 
 ssl_df = pd.DataFrame({'image': img_paths})
 ssl_ds = SSL_Dataset(ssl_df)
-ssl_dl = DataLoader(ssl_ds, batch_size=512, shuffle=False, num_workers=8)
+ssl_dl = DataLoader(ssl_ds, batch_size=800, shuffle=False, num_workers=8)
 
 # %%
 idx = np.random.randint(0, len(ssl_ds))
@@ -558,13 +559,11 @@ plt.tight_layout()
 print(f'showing image {img_name}')
 plt.show()
 
-# %%
-from tqdm import tqdm
 
-def train_ssl(model, ssl_dl, optimizer, loss, epochs, device):
+# %%
+def train_ssl(model, ssl_dl, optimizer, loss, epochs, device, experiment_name):
     model.train()
     train_loss = []
-    pbar = tqdm(total=epochs*len(ssl_dl))
     for epoch in range(epochs):
         running_loss = 0.0
         progress_bar = tqdm(ssl_dl, desc=f'Epoch {epoch+1}/{epochs}', unit='batch')
@@ -578,14 +577,24 @@ def train_ssl(model, ssl_dl, optimizer, loss, epochs, device):
             loss_out.backward()
             optimizer.step()
             running_loss += loss_out.item()
-            train_loss.append(running_loss / (progress_bar.n + 1))
-            progress_bar.set_postfix({'Loss': running_loss / (progress_bar.n + 1)})
-    with open(os.path.join('models', 'ssl_train_loss.pkl'), 'wb') as f:
+            epoch_loss = running_loss / len(ssl_dl)
+            train_loss.append(epoch_loss)
+            progress_bar.set_postfix({'Loss': epoch_loss})
+        torch.save(model, f'models/ssl/ssl_{experiment_name}.pth')
+        
+    with open(os.path.join('models', f'ssl_{experiment_name}_train_loss.pkl'), 'wb') as f:
         pickle.dump(train_loss, f)
 
 
 # %%
-ssl_model = SSL_RandomErasing().to(device)
+ssl_model = SSL_RandomErasing(
+                    c1_filters= 22,
+                    c2_filters= 32,
+                    c3_filters= 64,
+                    c4_filters= 80,
+                    c5_filters= 172,
+                    fc1_units= 500
+                ).to(device)
 ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
 ssl_loss = torch.nn.MSELoss()
 
@@ -593,8 +602,9 @@ train_ssl(model=ssl_model,
           ssl_dl=ssl_dl,
           optimizer=ssl_optimizer,
           loss=ssl_loss,
-          epochs=100,
-          device=device)
+          epochs=60,
+          device=device,
+          experiment_name='tinyNetv3')
 
 # %%
 idx = np.random.randint(0, len(ssl_ds))
@@ -634,32 +644,36 @@ plt.tight_layout()
 print(f'Showing image {img_name}')
 plt.show()
 
-# %%
-torch.save(ssl_model, 'models/ssl_model.pth')
-
 # %% [markdown]
 # ----
 # # <center>Transfer Learning from SSL
 
 # %%
-# take the encoder part of the ssl model
-
-# load the entire model ssl
-
-# Load the state dictionary
-state_dict = torch.load('models/ssl_model.pth')
-ssl_model_ = SSL_RandomErasing().to(device)
-ssl_model_.load_state_dict(state_dict)
+experiment_name = 'tinyNetv3'
+ssl_model_ = torch.load(f'models/ssl/ssl_{experiment_name}.pth')
+#ssl_model_ = SSL_RandomErasing().to(device)
+#ssl_model_.load_state_dict(state_dict)
 
 tinynet = ssl_model_.encoder
 
 optimizer = torch.optim.Adam(tinynet.parameters(), lr=0.001)
 criterion = torch.nn.CrossEntropyLoss()
-epochs = 100
+epochs = 150
 writer = SummaryWriter('runs/tinynet_ssl')
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
 
 
-train(tinynet, train_dl, val_dl, optimizer, criterion, epochs, writer, 'tinynet_sslv2', 'tinynet_ssl', device)
+train(model=tinynet,
+        train_dl=train_dl,
+        val_dl=val_dl,
+        optimizer=optimizer,
+        criterion=criterion,
+        scheduler=scheduler,
+        epochs=epochs,
+        writer=writer,
+        experiment_name='tinynet_ssl',
+        best_experiment_name='tinynet_ssl',
+        device=device)
 
 # %%
 plot_confusion_matrix(tinynet, val_dl)
