@@ -366,19 +366,22 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
     return val_acc
 
 # %%
-model = tinyNet(c1_filters= 22,
+model = tinyNet(c1_filters= 8,
                 c2_filters= 32,
                 c3_filters= 64,
-                c4_filters= 80,
+                c4_filters= 128,
                 c5_filters= 172,
-                fc1_units= 500).to(device)
+                fc1_units= 256).to(device)
 
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-experiment_name = 'tinyNetv4'
+
+experiment_name = 'tinyNetClassic'
+
 writer = SummaryWriter('runs/'+experiment_name)
 epochs = 150
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
+
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 # %%
@@ -390,8 +393,8 @@ train(model = model,
       scheduler = scheduler,
       epochs = epochs,
       writer = writer,
-      experiment_name = 'tinyNetv3',
-      best_experiment_name = 'tinyNetv3',
+      experiment_name = experiment_name,
+      best_experiment_name = experiment_name,
       device = device)
 
 
@@ -564,6 +567,8 @@ plt.show()
 def train_ssl(model, ssl_dl, optimizer, loss, epochs, device, experiment_name):
     model.train()
     train_loss = []
+    train_loss_mean = []
+    print(f'training {experiment_name}')
     for epoch in range(epochs):
         running_loss = 0.0
         progress_bar = tqdm(ssl_dl, desc=f'Epoch {epoch+1}/{epochs}', unit='batch')
@@ -577,23 +582,26 @@ def train_ssl(model, ssl_dl, optimizer, loss, epochs, device, experiment_name):
             loss_out.backward()
             optimizer.step()
             running_loss += loss_out.item()
-            epoch_loss = running_loss / len(ssl_dl)
-            train_loss.append(epoch_loss)
-            progress_bar.set_postfix({'Loss': epoch_loss})
+            progress_bar.set_postfix({'Loss': loss_out.item(), 'Mean Loss': (running_loss/(progress_bar.n + 1))})
+            train_loss.append(loss_out.item())
+            train_loss_mean.append(running_loss/(progress_bar.n + 1))
         torch.save(model, f'models/ssl/ssl_{experiment_name}.pth')
         
     with open(os.path.join('models', f'ssl_{experiment_name}_train_loss.pkl'), 'wb') as f:
         pickle.dump(train_loss, f)
+    with open(os.path.join('models', f'ssl_{experiment_name}_train_loss_mean.pkl'), 'wb') as f:
+        pickle.dump(train_loss_mean, f)
+    return train_loss
 
 
 # %%
 ssl_model = SSL_RandomErasing(
-                    c1_filters= 22,
+                    c1_filters= 8,
                     c2_filters= 32,
                     c3_filters= 64,
-                    c4_filters= 80,
+                    c4_filters= 128,
                     c5_filters= 172,
-                    fc1_units= 500
+                    fc1_units= 256
                 ).to(device)
 ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
 ssl_loss = torch.nn.MSELoss()
@@ -604,7 +612,7 @@ train_ssl(model=ssl_model,
           loss=ssl_loss,
           epochs=60,
           device=device,
-          experiment_name='tinyNetv3')
+          experiment_name=experiment_name)
 
 # %%
 idx = np.random.randint(0, len(ssl_ds))
@@ -649,10 +657,7 @@ plt.show()
 # # <center>Transfer Learning from SSL
 
 # %%
-experiment_name = 'tinyNetv3'
 ssl_model_ = torch.load(f'models/ssl/ssl_{experiment_name}.pth')
-#ssl_model_ = SSL_RandomErasing().to(device)
-#ssl_model_.load_state_dict(state_dict)
 
 tinynet = ssl_model_.encoder
 
@@ -671,12 +676,97 @@ train(model=tinynet,
         scheduler=scheduler,
         epochs=epochs,
         writer=writer,
-        experiment_name='tinynet_ssl',
-        best_experiment_name='tinynet_ssl',
+        experiment_name=experiment_name+ '_ssl',
+        best_experiment_name=experiment_name + '_ssl',
         device=device)
 
 # %%
 plot_confusion_matrix(tinynet, val_dl)
+
+# %% [markdown]
+# ----
+# # <center>Plots
+
+# %%
+experiment_name = 'tinyNetv3'
+
+train_acc = pickle.load(open(f'models/{experiment_name}_train_acc.pkl', 'rb'))
+val_acc = pickle.load(open(f'models/{experiment_name}_val_acc.pkl', 'rb'))
+train_loss = pickle.load(open(f'models/{experiment_name}_train_loss.pkl', 'rb'))
+val_loss = pickle.load(open(f'models/{experiment_name}_val_loss.pkl', 'rb'))
+
+plt.figure(figsize=(30, 10))
+plt.subplot(1, 2, 1)
+plt.plot(train_acc, label='train')
+plt.plot(val_acc, label='val')
+plt.title('Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(train_loss, label='train')
+plt.plot(val_loss, label='val')
+plt.title('Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+
+# %%
+train_acc_ssl = pickle.load(open(f'models/{experiment_name}_ssl_train_acc.pkl', 'rb'))
+val_acc_ssl = pickle.load(open(f'models/{experiment_name}_ssl_val_acc.pkl', 'rb'))
+train_loss_ssl = pickle.load(open(f'models/{experiment_name}_ssl_train_loss.pkl', 'rb'))
+val_loss_ssl = pickle.load(open(f'models/{experiment_name}_ssl_val_loss.pkl', 'rb'))
+
+plt.figure(figsize=(30, 10))
+plt.subplot(1, 2, 1)
+plt.plot(train_acc_ssl, label='train')
+plt.plot(val_acc_ssl, label='val')
+plt.title('Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(train_loss_ssl, label='train')
+plt.plot(val_loss_ssl, label='val')
+plt.title('Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+# %%
+plt.figure(figsize=(30, 10))
+plt.subplot(1, 2, 1)
+plt.plot(val_acc, label='tinynet')
+plt.plot(val_acc_ssl, label='tinynet_ssl')
+plt.title('Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(val_loss, label='tinynet')
+plt.plot(val_loss_ssl, label='tinynet_ssl')
+plt.title('Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+
+# %%
+ssl_loss = pickle.load(open(f'models/ssl_{experiment_name}_train_loss.pkl', 'rb'))
+
+plt.figure(figsize=(30, 10))
+plt.plot(ssl_loss)
+plt.title('SSL Loss')
+plt.xlabel('Batch')
+plt.ylabel('Loss')
+plt.show()
 
 
 # %% [markdown]
