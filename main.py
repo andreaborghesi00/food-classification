@@ -871,11 +871,6 @@ plt.show()
 
 
 # %%
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
-from sklearn.metrics import confusion_matrix
-
 def class_recall(model, test_dl, class_labels):
     model.eval()
     gt, pred = [], []
@@ -950,8 +945,6 @@ plt.show()
 
 
 # %%
-# calculate mean precision, recall and f1
-
 mean_precision = np.mean(list(precision))
 
 mean_recall = np.mean(list(recall))
@@ -962,13 +955,8 @@ print(f'Mean Precision: {mean_precision:.3f}')
 print(f'Mean Recall: {mean_recall:.3f}')
 print(f'Mean F1: {mean_f1:.3f}')
 
-# %%
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix
-from torch.utils.data import DataLoader
 
+# %%
 def get_confusion_matrix(model, test_dl):
     model.eval()
     gt, pred = [], []
