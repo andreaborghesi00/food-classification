@@ -969,9 +969,6 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
 
-# Assuming `device`, `model`, `val_dl`, and `class_list` are defined and loaded appropriately
-
-# Helper function to calculate confusion matrix and related metrics
 def get_confusion_matrix(model, test_dl):
     model.eval()
     gt, pred = [], []
@@ -985,25 +982,24 @@ def get_confusion_matrix(model, test_dl):
             pred.extend(predicted.cpu().numpy())
     return gt, pred
 
-# Helper function to calculate precision, recall, and f1 score
+
 def calculate_metrics(cm):
     precision = np.diag(cm) / np.sum(cm, axis=1)
     recall = np.diag(cm) / np.sum(cm, axis=0)
     f1 = 2 * (precision * recall) / (precision + recall)
     return np.nan_to_num(precision, nan=0.0), np.nan_to_num(recall, nan=0.0), np.nan_to_num(f1, nan=0.0)
 
-# Calculate the confusion matrix and metrics
+
 gt, pred = get_confusion_matrix(model, val_dl)
 classes = sorted(set(gt))
 cm = confusion_matrix(gt, pred, labels=classes)
 precision, recall, f1 = calculate_metrics(cm)
 
-# Find indices of images with lowest scores
 low_f1_indices = np.argsort(f1)[:5]
 low_recall_indices = np.argsort(recall)[:5]
 low_precision_indices = np.argsort(precision)[:5]
 
-# Helper function to plot images
+
 def plot_images(indices, title, gt_labels, pred_labels, dataset, num_images=5):
     mean = torch.tensor([0.485, 0.456, 0.406])
     std = torch.tensor([0.229, 0.224, 0.225])
@@ -1022,13 +1018,9 @@ def plot_images(indices, title, gt_labels, pred_labels, dataset, num_images=5):
     plt.tight_layout()
     plt.show()
 
-# Plot images with lowest F1 scores
+
 plot_images(low_f1_indices, 'Lowest F1 Scores', gt, pred, val_dl.dataset)
-
-# Plot images with lowest Recall scores
 plot_images(low_recall_indices, 'Lowest Recall Scores', gt, pred, val_dl.dataset)
-
-# Plot images with lowest Precision scores
 plot_images(low_precision_indices, 'Lowest Precision Scores', gt, pred, val_dl.dataset)
 
 
