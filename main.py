@@ -59,6 +59,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # %tensorboard --logdir={experiment_name}
 
 # %%
+# download dataset, if it doesn't exist
+
 if not os.path.exists('dataset'):
     os.makedirs('dataset')
 
@@ -84,6 +86,7 @@ if not os.path.exists('dataset/val_set'):
 
 
 # %%
+# load class list, the test set and the train set are handled in different ways since the test set doesn't have labels
 
 def get_df(path, class_list=None):
     
@@ -97,6 +100,7 @@ def get_df(path, class_list=None):
     return df
 
 class_list = pd.read_csv('dataset/class_list.txt', header=None, sep=' ', names=['class', 'name'], index_col=0)
+class_list['index'] = class_list.index
 
 train_df = get_df('dataset/train_info.csv', class_list)
 test_df = get_df('dataset/test_info.csv', class_list)
@@ -106,6 +110,8 @@ train_df
 
 
 # %%
+# create a dataset class, the images are loaded on the fly, all the dataset couldn't fit in memory
+
 class FoodDataset(Dataset):
         def __init__(self, df, root_dir, transform=None):
             self.df = df
@@ -130,6 +136,7 @@ class FoodDataset(Dataset):
 
 
 # %%
+# transform to apply to the images, the training set is augmented, the validation and test set are only resized and normalized, the augmentation are not aggressive
 
 transform_val = transforms.Compose([
     transforms.Resize((128, 128)),
@@ -154,9 +161,9 @@ train_ds = FoodDataset(train_df, 'dataset/train_set', augmentation_train)
 test_ds = FoodDataset(test_df, 'dataset/test_set', transform_val)
 val_ds = FoodDataset(val_df, 'dataset/val_set', transform_val)
 
-train_dl = DataLoader(train_ds, batch_size=1024, shuffle=True, num_workers=8)
-test_dl = DataLoader(test_ds, batch_size=1024, shuffle=False, num_workers=8)
-val_dl = DataLoader(val_ds, batch_size=1024, shuffle=False, num_workers=8)
+train_dl = DataLoader(train_ds, batch_size=512, shuffle=True, num_workers=8)
+test_dl = DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=8)
+val_dl = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=8)
 
 
 # %% [markdown]
@@ -164,6 +171,8 @@ val_dl = DataLoader(val_ds, batch_size=1024, shuffle=False, num_workers=8)
 # # <center>Neural Networks
 
 # %%
+# create the model, the filter parameters are taken from the arguments since this is a modular design
+
 class tinyNet(Module):
     def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
         super(tinyNet, self).__init__()
@@ -204,14 +213,14 @@ class tinyNet(Module):
         self.conv5 = Sequential(
             Conv2d(c5_filters, c5_filters, kernel_size=3, stride=1, padding='same'),
             GELU(),
-            Conv2d(c5_filters, 32, kernel_size=3, stride=1, padding=1),
+            Conv2d(c5_filters, 32, kernel_size=3, stride=1, padding=1), # 32 is the number of filters in the last conv layer, hardcoded.
             BatchNorm2d(32),
             GELU(),
             MaxPool2d(kernel_size=2, stride=2, padding=0)
         )
 
         self.fc1 = Sequential(
-            Linear(32*4*4, fc1_units),
+            Linear(32*4*4, fc1_units), # 32*4*4 is the size of the tensor after the last conv layer, this parameter is hardcoded because it's the key to keep the number of parameters low (that's the secret sauce for you)
             Dropout(.2),
             GELU()
         )
@@ -234,6 +243,8 @@ class tinyNet(Module):
 
 
 # %%
+# the train design is modular, the model, the dataloaders, the optimizer, the scheduler and the criterion are passed as arguments, the best model is saved in the models folder based on the experiment name
+
 def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
     train_loss = []
     val_loss = []
@@ -366,17 +377,17 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
     return val_acc
 
 # %%
-model = tinyNet(c1_filters= 8,
-                c2_filters= 32,
-                c3_filters= 64,
-                c4_filters= 128,
-                c5_filters= 172,
-                fc1_units= 256).to(device)
+model = tinyNet(c1_filters= 16,
+                c2_filters= 70,
+                c3_filters= 140,
+                c4_filters= 140,
+                c5_filters= 32,
+                fc1_units= 347).to(device)
 
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-experiment_name = 'tinyNetClassic'
+experiment_name = 'tinyNetv5'
 
 writer = SummaryWriter('runs/'+experiment_name)
 epochs = 150
@@ -399,6 +410,8 @@ train(model = model,
 
 
 # %%
+# this plot is hard to  visualize because of the number of classes, but it's useful to see the training progress
+
 def plot_confusion_matrix(net, test_loader):
     
     net.eval()
@@ -428,6 +441,9 @@ plot_confusion_matrix(model, val_dl)
 # # <center>Self Supervised Learning
 
 # %%
+# this class is completely modular, the model which will be used for the SSL is passed as an argument and the forward method is implemented to return the output of the encoder bypassing the fully connected layers
+# this is handy because the encoder is the only part of the model that will be used for the transfer learning, so we can easily extract it
+
 class SSL_RandomErasing(torch.nn.Module):
     def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
         super().__init__()
@@ -498,6 +514,8 @@ class SSL_RandomErasing(torch.nn.Module):
         
 
 # %%
+# this is the dataset class for the SSL, it's very similar to the previous one, the only difference is that the noisy image is returned as well and no labels are needed, the noisy image are just the images with random erasing applied
+
 class SSL_Dataset(Dataset):
     def __init__(self, df):
         self.df = df
@@ -522,6 +540,8 @@ class SSL_Dataset(Dataset):
 
 
 # %%
+# here we create a custom dataset containing both the training and the test set
+
 img_paths = train_df['image']
 img_paths = img_paths.apply(lambda x: 'dataset/train_set/' + x)
 img_paths = pd.concat([img_paths, test_df['image'].apply(lambda x: 'dataset/test_set/' + x)])
@@ -541,7 +561,7 @@ img_name = ssl_ds.df.iloc[idx, 0]
 
 mean = torch.tensor([0.485, 0.456, 0.406])
 std = torch.tensor([0.229, 0.224, 0.225])
-clean_image = clean_image * std[:, None, None] + mean[:, None, None] 
+clean_image = clean_image * std[:, None, None] + mean[:, None, None]  # unnormalize
 noisy_image = noisy_image * std[:, None, None] + mean[:, None, None]
 
 
@@ -550,11 +570,11 @@ noisy_image = torch.clamp(noisy_image, 0, 1)
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
 
-ax1.imshow(clean_image.permute(1, 2, 0))
+ax1.imshow(clean_image.permute(1, 2, 0)) # permute to change the order of the channels, from CxHxW to HxWxC, which is the format that matplotlib expects because the image is a tensor
 ax1.set_title('Clean Image')
 ax1.axis('off')
 
-ax2.imshow(noisy_image.permute(1, 2, 0))
+ax2.imshow(noisy_image.permute(1, 2, 0)) 
 ax2.set_title('Noisy Image')
 ax2.axis('off')
 
@@ -564,6 +584,8 @@ plt.show()
 
 
 # %%
+# this is a simple training loop for the SSL
+
 def train_ssl(model, ssl_dl, optimizer, loss, epochs, device, experiment_name):
     model.train()
     train_loss = []
@@ -615,6 +637,8 @@ train_ssl(model=ssl_model,
           experiment_name=experiment_name)
 
 # %%
+# again, just to visualize the results
+
 idx = np.random.randint(0, len(ssl_ds))
 clean_image, noisy_image = ssl_ds[idx]
 
@@ -657,6 +681,8 @@ plt.show()
 # # <center>Transfer Learning from SSL
 
 # %%
+# this is the transfer learning part, the encoder is extracted from the SSL model and used to train a new model
+
 ssl_model_ = torch.load(f'models/ssl/ssl_{experiment_name}.pth')
 
 tinynet = ssl_model_.encoder
@@ -688,7 +714,7 @@ plot_confusion_matrix(tinynet, val_dl)
 # # <center>Plots
 
 # %%
-experiment_name = 'tinyNetv3'
+#experiment_name = 'tinyNetv3'
 
 train_acc = pickle.load(open(f'models/{experiment_name}_train_acc.pkl', 'rb'))
 val_acc = pickle.load(open(f'models/{experiment_name}_val_acc.pkl', 'rb'))
@@ -759,7 +785,7 @@ plt.show()
 
 
 # %%
-ssl_loss = pickle.load(open(f'models/ssl_{experiment_name}_train_loss.pkl', 'rb'))
+ssl_loss = pickle.load(open(f'models/ssl_{experiment_name}_train_loss_mean.pkl', 'rb'))
 
 plt.figure(figsize=(30, 10))
 plt.plot(ssl_loss)
@@ -767,6 +793,243 @@ plt.title('SSL Loss')
 plt.xlabel('Batch')
 plt.ylabel('Loss')
 plt.show()
+
+
+# %%
+# load the model
+experiment_name = 'tinyNetClassic_ssl'
+
+checkpoint = torch.load(f'models/best_{experiment_name}.pth')
+model = checkpoint['model']
+model.to(device)
+model.eval()
+
+
+
+
+# %%
+# count the number of images that there are for every class, in order to see if the model is biased towards some classes
+
+count_classes = val_df['class'].value_counts()
+
+plt.figure(figsize=(40, 10))
+plt.bar(count_classes.index, count_classes.values)
+plt.xticks(rotation=90)
+
+plt.title('Class Count')
+plt.xlabel('Class')
+plt.ylabel('Count')
+plt.show()
+
+
+# %%
+# calculate the precision for every class, this is useful to see if the model is biased towards some classes
+
+def class_precision(model, test_dl, class_labels):
+    model.eval()
+    gt = []
+    pred = []
+    with torch.no_grad():
+        for el, labels in test_dl:
+            el = el.to(device)
+            labels = labels.to(device)
+            out = model(el)
+            _, predicted = torch.max(out, 1)
+            gt.extend(labels.cpu().numpy())
+            pred.extend(predicted.cpu().numpy())
+
+    class_indices = sorted(set(gt))
+    
+    cm = confusion_matrix(gt, pred, labels=class_indices)
+    precision = np.diag(cm) / np.sum(cm, axis=1)
+    
+    precision_dict = {}
+    for label in class_labels:
+        if label in class_indices:
+            precision_dict[label] = precision[label]
+        else:
+            precision_dict[label] = 0.0  # Assign 0.0 precision for missing classes
+    
+    return precision_dict
+
+
+
+# create a tuple with the class name and the precision, so that i can later sort it
+precision = class_precision(model, val_dl, class_list['index'].values)
+precision = {k: v for k, v in sorted(precision.items(), key=lambda item: item[1], reverse=True)}
+precision = {class_list.loc[k, 'name']: v for k, v in precision.items()}
+
+
+plt.figure(figsize=(40, 10))
+plt.bar(precision.keys(), precision.values())
+plt.xticks(rotation=90)
+plt.title('Class Precision')
+plt.xlabel('Class')
+plt.ylabel('Precision')
+plt.show()
+
+
+
+# %%
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from sklearn.metrics import confusion_matrix
+
+def class_recall(model, test_dl, class_labels):
+    model.eval()
+    gt, pred = [], []
+    with torch.no_grad():
+        for el, labels in test_dl:
+            el, labels = el.to(device), labels.to(device)
+            out = model(el)
+            _, predicted = torch.max(out, 1)
+            gt.extend(labels.cpu().numpy())
+            pred.extend(predicted.cpu().numpy())
+
+    classes = sorted(set(gt))
+    class_indices = {label: i for i, label in enumerate(classes)}
+    cm = confusion_matrix(gt, pred, labels=classes)
+    recall = np.nan_to_num(np.diag(cm) / np.sum(cm, axis=0), nan=0.0)
+    
+    return {label: recall[class_indices[label]] if label in class_indices else 0.0 for label in class_labels}
+
+recall = class_recall(model, val_dl, class_list['index'].values)
+recall = {class_list.loc[k, 'name']: v for k, v in recall.items()}
+
+sorted_recall = dict(sorted(recall.items(), key=lambda x: x[1], reverse=True))
+class_names, recall_values = list(sorted_recall.keys()), list(sorted_recall.values())
+
+plt.figure(figsize=(40, 10))
+plt.bar(range(len(class_names)), recall_values)
+plt.xticks(range(len(class_names)), class_names, rotation=90)
+plt.title('Class Recall')
+plt.xlabel('Class')
+plt.ylabel('Recall')
+plt.ylim(0, 1)
+plt.tight_layout()
+plt.show()
+
+
+# %%
+def class_f1(model, test_dl, class_labels):
+    model.eval()
+    gt, pred = [], []
+    with torch.no_grad():
+        for el, labels in test_dl:
+            el, labels = el.to(device), labels.to(device)
+            out = model(el)
+            _, predicted = torch.max(out, 1)
+            gt.extend(labels.cpu().numpy())
+            pred.extend(predicted.cpu().numpy())
+
+    classes = sorted(set(gt))
+    class_indices = {label: i for i, label in enumerate(classes)}
+    cm = confusion_matrix(gt, pred, labels=classes)
+    
+    precision = np.nan_to_num(np.diag(cm) / np.sum(cm, axis=1), nan=0.0)
+    recall = np.nan_to_num(np.diag(cm) / np.sum(cm, axis=0), nan=0.0)
+    f1 = np.nan_to_num(2 * (precision * recall) / (precision + recall), nan=0.0)
+    
+    return {label: f1[class_indices[label]] if label in class_indices else 0.0 for label in class_labels}
+
+f1 = class_f1(model, val_dl, class_list['index'].values)
+f1 = {class_list.loc[k, 'name']: v for k, v in f1.items()}
+sorted_f1 = dict(sorted(f1.items(), key=lambda x: x[1], reverse=True))
+class_names, f1_values = list(sorted_f1.keys()), list(sorted_f1.values())
+
+plt.figure(figsize=(40, 10))
+plt.bar(class_names, f1_values)
+plt.xticks(rotation=90)
+plt.title('Class F1')
+plt.xlabel('Class')
+plt.ylabel('F1')
+plt.ylim(0, 1)
+plt.tight_layout()
+plt.show()
+
+
+# %%
+# calculate mean precision, recall and f1
+
+mean_precision = np.mean(list(precision))
+
+mean_recall = np.mean(list(recall))
+
+mean_f1 = np.mean(list(f1))
+
+print(f'Mean Precision: {mean_precision:.3f}')
+print(f'Mean Recall: {mean_recall:.3f}')
+print(f'Mean F1: {mean_f1:.3f}')
+
+# %%
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+from torch.utils.data import DataLoader
+
+# Assuming `device`, `model`, `val_dl`, and `class_list` are defined and loaded appropriately
+
+# Helper function to calculate confusion matrix and related metrics
+def get_confusion_matrix(model, test_dl):
+    model.eval()
+    gt, pred = [], []
+    with torch.no_grad():
+        for el, labels in test_dl:
+            el = el.to(device)
+            labels = labels.to(device)
+            out = model(el)
+            _, predicted = torch.max(out, 1)
+            gt.extend(labels.cpu().numpy())
+            pred.extend(predicted.cpu().numpy())
+    return gt, pred
+
+# Helper function to calculate precision, recall, and f1 score
+def calculate_metrics(cm):
+    precision = np.diag(cm) / np.sum(cm, axis=1)
+    recall = np.diag(cm) / np.sum(cm, axis=0)
+    f1 = 2 * (precision * recall) / (precision + recall)
+    return np.nan_to_num(precision, nan=0.0), np.nan_to_num(recall, nan=0.0), np.nan_to_num(f1, nan=0.0)
+
+# Calculate the confusion matrix and metrics
+gt, pred = get_confusion_matrix(model, val_dl)
+classes = sorted(set(gt))
+cm = confusion_matrix(gt, pred, labels=classes)
+precision, recall, f1 = calculate_metrics(cm)
+
+# Find indices of images with lowest scores
+low_f1_indices = np.argsort(f1)[:5]
+low_recall_indices = np.argsort(recall)[:5]
+low_precision_indices = np.argsort(precision)[:5]
+
+# Helper function to plot images
+def plot_images(indices, title, gt_labels, pred_labels, dataset, num_images=5):
+    mean = torch.tensor([0.485, 0.456, 0.406])
+    std = torch.tensor([0.229, 0.224, 0.225])
+    
+    fig, axes = plt.subplots(1, num_images, figsize=(20, 5))
+    for i, idx in enumerate(indices):
+        img, label = dataset[idx]
+        img = img * std[:, None, None] + mean[:, None, None]  # Unnormalize
+        img = torch.clamp(img, 0, 1)
+        
+        axes[i].imshow(img.permute(1, 2, 0))
+        axes[i].set_title(f'True: {class_list.loc[gt_labels[idx], "name"]}\nPred: {class_list.loc[pred_labels[idx], "name"]}')
+        axes[i].axis('off')
+    
+    plt.suptitle(title)
+    plt.tight_layout()
+    plt.show()
+
+# Plot images with lowest F1 scores
+plot_images(low_f1_indices, 'Lowest F1 Scores', gt, pred, val_dl.dataset)
+
+# Plot images with lowest Recall scores
+plot_images(low_recall_indices, 'Lowest Recall Scores', gt, pred, val_dl.dataset)
+
+# Plot images with lowest Precision scores
+plot_images(low_precision_indices, 'Lowest Precision Scores', gt, pred, val_dl.dataset)
 
 
 # %% [markdown]
