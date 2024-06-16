@@ -161,9 +161,9 @@ train_ds = FoodDataset(train_df, 'dataset/train_set', augmentation_train)
 test_ds = FoodDataset(test_df, 'dataset/test_set', transform_val)
 val_ds = FoodDataset(val_df, 'dataset/val_set', transform_val)
 
-train_dl = DataLoader(train_ds, batch_size=512, shuffle=True, num_workers=8)
-test_dl = DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=8)
-val_dl = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=8)
+train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
+test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
+val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
 
 
 # %% [markdown]
@@ -359,7 +359,8 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
                 'criterion': criterion,
                 'epoch': epoch,
                 'best_acc': best_acc,
-                'scheduler': scheduler
+                'scheduler': scheduler,
+                'state_dict': model.state_dict(),
             }
             torch.save(checkpoint, os.path.join('models', 'best_' + experiment_name + '.pth'))
         pbar.update(1)
@@ -408,32 +409,62 @@ train(model = model,
       best_experiment_name = experiment_name,
       device = device)
 
+# %%
 
 # %%
 # this plot is hard to  visualize because of the number of classes, but it's useful to see the training progress
+import torchmetrics as tm
 
-def plot_confusion_matrix(net, test_loader):
+def evaluate_model(net, test_loader):
     
     net.eval()
     gt = []
     pred = []
+    
+    micro_acc = tm.Accuracy(task='multiclass', average='micro', num_classes=251).to(device)
+    macro_acc = tm.Accuracy(task='multiclass', average='macro', num_classes=251).to(device)
+    micro_f1_score = tm.F1Score(task='multiclass', average='micro', num_classes=251, multidim_average='global').to(device)
+    macro_f1_score = tm.F1Score(task='multiclass', average='macro', num_classes=251, multidim_average='global').to(device)
+    micro_precision = tm.Precision(task='multiclass', average='micro', num_classes=251).to(device)
+    macro_precision = tm.Precision(task='multiclass', average='macro', num_classes=251).to(device)
+    micro_recall = tm.Recall(task='multiclass', average='micro', num_classes=251).to(device)
+    macro_recall = tm.Recall(task='multiclass', average='macro', num_classes=251).to(device)
+
     with torch.no_grad():
         for el, labels in test_loader:
             el = el.to(device)
             labels = labels.to(device)
             out = net(el)
             _, predicted = torch.max(out, 1)
+
+            micro_acc.update(predicted, labels)
+            macro_acc.update(predicted, labels)
+            micro_f1_score.update(predicted, labels)
+            micro_precision.update(predicted, labels)
+            macro_f1_score.update(predicted, labels)
+            macro_precision.update(predicted, labels)
+            micro_recall.update(predicted, labels)
+            macro_recall.update(predicted, labels)
+
             gt.extend(labels.cpu().numpy())
             pred.extend(predicted.cpu().numpy())
 
+    print(f"""
+          Micro Accuracy: {micro_acc.compute().item()}\tMacro Accuracy:\t{macro_acc.compute().item()}
+          Micro F1 Score: {micro_f1_score.compute().item()}\tMacro F1 Score:\t{macro_f1_score.compute().item()}
+          Micro Precision:{micro_precision.compute().item()}\tMacro Precision:{macro_precision.compute().item()}
+          Micro Recall:   {micro_recall.compute().item()}\tMacro Recall:\t{macro_recall.compute().item()}
+          """)
+    
     cm = confusion_matrix(gt, pred)
-    plt.figure(figsize=(40, 40))
-    sns.heatmap(cm, annot=True, fmt='g', cmap='viridis', xticklabels=class_list['name'].values, yticklabels=class_list['name'].values)
+    plt.figure(figsize=(50, 40))
+    sns.heatmap(cm, annot=False, fmt='g', cmap='viridis', xticklabels=class_list['name'].values, yticklabels=class_list['name'].values)
     plt.xlabel('Predicted')
     plt.ylabel('Actual')
     plt.show()
 
-plot_confusion_matrix(model, val_dl)
+model = torch.load('models/best_tinyNetv3.pth')['model']
+evaluate_model(model, val_dl)
 
 
 # %% [markdown]
@@ -714,58 +745,130 @@ plot_confusion_matrix(tinynet, val_dl)
 # # <center>Plots
 
 # %%
-#experiment_name = 'tinyNetv3'
+experiment_name = 'tinyNetv3'
+fontsize = 18
 
-train_acc = pickle.load(open(f'models/{experiment_name}_train_acc.pkl', 'rb'))
-val_acc = pickle.load(open(f'models/{experiment_name}_val_acc.pkl', 'rb'))
-train_loss = pickle.load(open(f'models/{experiment_name}_train_loss.pkl', 'rb'))
-val_loss = pickle.load(open(f'models/{experiment_name}_val_loss.pkl', 'rb'))
+train_acc = pickle.load(open(f'cetriolini/{experiment_name}_train_acc.pkl', 'rb'))
+val_acc = pickle.load(open(f'cetriolini/{experiment_name}_val_acc.pkl', 'rb'))
+train_loss = pickle.load(open(f'cetriolini/{experiment_name}_train_loss.pkl', 'rb'))
+val_loss = pickle.load(open(f'cetriolini/{experiment_name}_val_loss.pkl', 'rb'))
 
-plt.figure(figsize=(30, 10))
+plt.figure(figsize=(25, 10))
+
 plt.subplot(1, 2, 1)
 plt.plot(train_acc, label='train')
 plt.plot(val_acc, label='val')
-plt.title('Accuracy')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
+plt.title('Accuracy', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Accuracy (%)', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
 
 plt.subplot(1, 2, 2)
 plt.plot(train_loss, label='train')
 plt.plot(val_loss, label='val')
-plt.title('Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
+plt.title('Loss', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Loss', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
+
 plt.show()
 
 
 # %%
-train_acc_ssl = pickle.load(open(f'models/{experiment_name}_ssl_train_acc.pkl', 'rb'))
-val_acc_ssl = pickle.load(open(f'models/{experiment_name}_ssl_val_acc.pkl', 'rb'))
-train_loss_ssl = pickle.load(open(f'models/{experiment_name}_ssl_train_loss.pkl', 'rb'))
-val_loss_ssl = pickle.load(open(f'models/{experiment_name}_ssl_val_loss.pkl', 'rb'))
+train_acc_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_train_acc.pkl', 'rb'))
+val_acc_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_val_acc.pkl', 'rb'))
+train_loss_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_train_loss.pkl', 'rb'))
+val_loss_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_val_loss.pkl', 'rb'))
 
-plt.figure(figsize=(30, 10))
+plt.figure(figsize=(25, 10))
 plt.subplot(1, 2, 1)
 plt.plot(train_acc_ssl, label='train')
 plt.plot(val_acc_ssl, label='val')
-plt.title('Accuracy')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
+plt.title('Accuracy', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Accuracy', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
 
+# Loss plot
 plt.subplot(1, 2, 2)
 plt.plot(train_loss_ssl, label='train')
 plt.plot(val_loss_ssl, label='val')
-plt.title('Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
+plt.title('Loss', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Loss', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
+
 plt.show()
 
 # %%
-plt.figure(figsize=(30, 10))
+train_acc_classic = pickle.load(open(f'cetriolini/tinyNetClassic_train_acc.pkl', 'rb'))
+val_acc_classic = pickle.load(open(f'cetriolini/tinyNetClassic_val_acc.pkl', 'rb'))
+train_loss_classic = pickle.load(open(f'cetriolini/tinyNetClassic_train_loss.pkl', 'rb'))
+val_loss_classic = pickle.load(open(f'cetriolini/tinyNetClassic_val_loss.pkl', 'rb'))
+
+plt.figure(figsize=(25, 10))
+plt.subplot(1, 2, 1)
+plt.plot(train_acc_classic, label='train')
+plt.plot(val_acc_classic, label='val')
+plt.title('Accuracy', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Accuracy', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
+
+# Loss plot
+plt.subplot(1, 2, 2)
+plt.plot(train_loss_classic, label='train')
+plt.plot(val_loss_classic, label='val')
+plt.title('Loss', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Loss', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
+plt.show()
+
+# %%
+train_acc_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_train_acc.pkl', 'rb'))
+val_acc_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_val_acc.pkl', 'rb'))
+train_loss_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_train_loss.pkl', 'rb'))
+val_loss_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_val_loss.pkl', 'rb'))
+
+plt.figure(figsize=(25, 10))
+plt.subplot(1, 2, 1)
+plt.plot(train_acc_ssl, label='train')
+plt.plot(val_acc_ssl, label='val')
+plt.title('Accuracy', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Accuracy', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
+
+# Loss plot
+plt.subplot(1, 2, 2)
+plt.plot(train_loss_ssl, label='train')
+plt.plot(val_loss_ssl, label='val')
+plt.title('Loss', fontsize=fontsize)
+plt.xlabel('Epoch', fontsize=fontsize)
+plt.ylabel('Loss', fontsize=fontsize)
+plt.legend(fontsize=fontsize)
+plt.xticks(fontsize=fontsize)
+plt.yticks(fontsize=fontsize)
+
+plt.show()
+
+# %%
+plt.figure(figsize=(25, 10))
 plt.subplot(1, 2, 1)
 plt.plot(val_acc, label='tinynet')
 plt.plot(val_acc_ssl, label='tinynet_ssl')
