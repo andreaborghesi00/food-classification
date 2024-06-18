@@ -387,7 +387,7 @@ model = tinyNet(c1_filters= 16,
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-experiment_name = 'tinyNetv5'
+experiment_name = 'tinyNetClassic'
 
 writer = SummaryWriter('runs/'+experiment_name)
 epochs = 150
@@ -547,6 +547,114 @@ class SSL_RandomErasing(torch.nn.Module):
         
 
 # %%
+# this class is completely modular, the model which will be used for the SSL is passed as an argument and the forward method is implemented to return the output of the encoder bypassing the fully connected layers
+# this is handy because the encoder is the only part of the model that will be used for the transfer learning, so we can easily extract it
+
+class SSL_RandomErasingNoBottleneck(torch.nn.Module):
+    def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
+        super().__init__()
+        
+        self.conv1 = Sequential(
+                Conv2d(3, c1_filters, kernel_size=3, stride=1, padding='same'),
+                GELU(),
+                Conv2d(c1_filters, c2_filters, kernel_size=3, stride=1, padding=1),
+                BatchNorm2d(c2_filters),
+                GELU(),
+                MaxPool2d(kernel_size=2, stride=2, padding=0)
+            )
+        self.conv2 = Sequential(
+            Conv2d(c2_filters, c2_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c2_filters, c3_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c3_filters),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+        self.conv3 = Sequential(
+            Conv2d(c3_filters, c3_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c3_filters, c4_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c4_filters),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        self.conv4 = Sequential(
+            Conv2d(c4_filters, c4_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c4_filters, c5_filters, kernel_size=3, stride=1, padding=1),
+            BatchNorm2d(c5_filters),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        self.conv5 = Sequential(
+            Conv2d(c5_filters, c5_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c5_filters, 256, kernel_size=3, stride=1, padding=1), # 256 is the number of filters in the last conv layer, hardcoded.
+            BatchNorm2d(256),
+            GELU(),
+            MaxPool2d(kernel_size=2, stride=2, padding=0)
+        )
+
+        # Decoder
+        self.upconv1= Sequential(
+            Conv2d(256, c5_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c5_filters, c5_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv2 = Sequential(
+            Conv2d(c5_filters, c4_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c4_filters, c4_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv3 = Sequential(
+            Conv2d(c4_filters, c3_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c3_filters, c3_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv4 = Sequential(
+            Conv2d(c3_filters, c2_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c2_filters, c2_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv5 = Sequential(
+            Conv2d(c2_filters, c1_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c1_filters, 3, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+    def forward(self, x):
+        x1 = self.conv1(x)
+        x2 = self.conv2(x1)
+        x3 = self.conv3(x2)
+        x4 = self.conv4(x3)
+        x5 = self.conv5(x4)
+        
+        x = self.upconv1(x5)
+        x = self.upconv2(x + x4)
+        x = self.upconv3(x + x3)
+        x = self.upconv4(x + x2)
+        x = self.upconv5(x + x1)
+        return x
+
+        
+
+# %%
 # this is the dataset class for the SSL, it's very similar to the previous one, the only difference is that the noisy image is returned as well and no labels are needed, the noisy image are just the images with random erasing applied
 
 class SSL_Dataset(Dataset):
@@ -650,7 +758,7 @@ def train_ssl(model, ssl_dl, optimizer, loss, epochs, device, experiment_name):
 
 
 # %%
-ssl_model = SSL_RandomErasing(
+ssl_model = SSL_RandomErasingNoBottleneck(
                     c1_filters= 8,
                     c2_filters= 32,
                     c3_filters= 64,
@@ -661,13 +769,18 @@ ssl_model = SSL_RandomErasing(
 ssl_optimizer = torch.optim.Adam(ssl_model.parameters(), lr=0.001)
 ssl_loss = torch.nn.MSELoss()
 
+
+# %%
 train_ssl(model=ssl_model,
           ssl_dl=ssl_dl,
           optimizer=ssl_optimizer,
           loss=ssl_loss,
-          epochs=60,
+          epochs=10,
           device=device,
           experiment_name=experiment_name)
+
+# %%
+ssl_model = torch.load('models/ssl/ssl_tinyNetClassic_new.pth')
 
 # %%
 # again, just to visualize the results
