@@ -327,7 +327,6 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
         model.eval()
         running_loss = 0.0
         correct = 0
-        total = 0
         
         # ------------------------------ VALIDATION LOOP ------------------------------
         with torch.no_grad():
@@ -345,12 +344,11 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
                 writer.add_scalar("val", loss.item(), n_iter)
         
         # ------------------------------ PRINTING AND MODEL SAVING ------------------------------
-        
-        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc: {best_running_acc:.3f}%')
+        pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/len(val_ds):.3f}%, Acc to beat: {best_acc:.3f}%')
         val_loss.append(running_loss/len(val_dl))
         val_acc.append(100*correct/len(val_ds))
         if val_acc[-1] > best_running_acc:
-            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc beated, saving model')
+            pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/len(val_ds):.3f}%, Acc to beat: {best_acc:.3f}%')
             best_running_acc = val_acc[-1]
             checkpoint = {
                 'model': model,
@@ -554,39 +552,12 @@ class SSL_RandomErasingNoBottleneck(torch.nn.Module):
     def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
         super().__init__()
         
-        self.conv1 = Sequential(
-                Conv2d(3, c1_filters, kernel_size=3, stride=1, padding='same'),
-                GELU(),
-                Conv2d(c1_filters, c2_filters, kernel_size=3, stride=1, padding=1),
-                BatchNorm2d(c2_filters),
-                GELU(),
-                MaxPool2d(kernel_size=2, stride=2, padding=0)
-            )
-        self.conv2 = Sequential(
-            Conv2d(c2_filters, c2_filters, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(c2_filters, c3_filters, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(c3_filters),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-        self.conv3 = Sequential(
-            Conv2d(c3_filters, c3_filters, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(c3_filters, c4_filters, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(c4_filters),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
-
-        self.conv4 = Sequential(
-            Conv2d(c4_filters, c4_filters, kernel_size=3, stride=1, padding='same'),
-            GELU(),
-            Conv2d(c4_filters, c5_filters, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(c5_filters),
-            GELU(),
-            MaxPool2d(kernel_size=2, stride=2, padding=0)
-        )
+        self.encoder = tinyNet(c1_filters= c1_filters,
+                                c2_filters= c2_filters,
+                                c3_filters= c3_filters,
+                                c4_filters= c4_filters,
+                                c5_filters= c5_filters,
+                                fc1_units= fc1_units)
 
         self.conv5 = Sequential(
             Conv2d(c5_filters, c5_filters, kernel_size=3, stride=1, padding='same'),
@@ -639,10 +610,10 @@ class SSL_RandomErasingNoBottleneck(torch.nn.Module):
         )
 
     def forward(self, x):
-        x1 = self.conv1(x)
-        x2 = self.conv2(x1)
-        x3 = self.conv3(x2)
-        x4 = self.conv4(x3)
+        x1 = self.encoder.conv1(x)
+        x2 = self.encoder.conv2(x1)
+        x3 = self.encoder.conv3(x2)
+        x4 = self.encoder.conv4(x3)
         x5 = self.conv5(x4)
         
         x = self.upconv1(x5)
@@ -690,7 +661,7 @@ img_paths = pd.concat([img_paths, test_df['image'].apply(lambda x: 'dataset/test
 
 ssl_df = pd.DataFrame({'image': img_paths})
 ssl_ds = SSL_Dataset(ssl_df)
-ssl_dl = DataLoader(ssl_ds, batch_size=800, shuffle=False, num_workers=8)
+ssl_dl = DataLoader(ssl_ds, batch_size=256, shuffle=False, num_workers=8)
 
 # %%
 idx = np.random.randint(0, len(ssl_ds))
@@ -771,16 +742,21 @@ ssl_loss = torch.nn.MSELoss()
 
 
 # %%
+experiment_name = 'tinynetClassicv2'
+
 train_ssl(model=ssl_model,
           ssl_dl=ssl_dl,
           optimizer=ssl_optimizer,
           loss=ssl_loss,
-          epochs=10,
+          epochs=20,
           device=device,
           experiment_name=experiment_name)
 
 # %%
-ssl_model = torch.load('models/ssl/ssl_tinyNetClassic_new.pth')
+experiment_name = 'tinynetClassicv2'
+
+ssl_model = torch.load(f'models/ssl/ssl_{experiment_name}.pth')
+
 
 # %%
 # again, just to visualize the results
@@ -822,12 +798,181 @@ plt.tight_layout()
 print(f'Showing image {img_name}')
 plt.show()
 
+
+# %%
+class Generator(nn.Module):
+    def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
+        super().__init__()
+        
+        self.encoder = tinyNet(c1_filters= c1_filters,
+                                c2_filters= c2_filters,
+                                c3_filters= c3_filters,
+                                c4_filters= c4_filters,
+                                c5_filters= c5_filters,
+                                fc1_units= fc1_units)
+
+        # Decoder with skip connections
+        self.upconv1 = Sequential(
+            Conv2d(32, c4_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c4_filters, c4_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv2 = Sequential(
+            Conv2d(c4_filters * 2, c3_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c3_filters, c3_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv3 = Sequential(
+            Conv2d(c3_filters * 2, c2_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c2_filters, c2_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv4 = Sequential(
+            Conv2d(c2_filters * 2, c1_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c1_filters, c1_filters, kernel_size=3, stride=1, padding=1),
+            GELU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
+
+        self.upconv5 = Sequential(
+            Conv2d(c1_filters * 2, c1_filters, kernel_size=3, stride=1, padding='same'),
+            GELU(),
+            Conv2d(c1_filters, 3, kernel_size=3, stride=1, padding=1),
+            nn.Tanh()
+        )
+
+    def forward(self, x):
+        x1 = self.encoder.conv1(x)
+        x2 = self.encoder.conv2(x1)
+        x3 = self.encoder.conv3(x2)
+        x4 = self.encoder.conv4(x3)
+        x5 = self.encoder.conv5(x4)
+        
+        x = self.upconv1(x5)
+        x = torch.cat([x, x4], dim=1)
+
+        x = self.upconv2(x)
+        x = torch.cat([x, x3], dim=1)
+        
+        x = self.upconv3(x)
+        x = torch.cat([x, x2], dim=1)
+        
+        x = self.upconv4(x)
+        x = torch.cat([x, x1], dim=1)
+        
+        x = self.upconv5(x)
+        
+        return x
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = Sequential(
+            Conv2d(3, 64, kernel_size=4, stride=2, padding=1),
+            LeakyReLU(0.2, inplace=True)
+        )
+        self.conv2 = Sequential(
+            Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            BatchNorm2d(128),
+            LeakyReLU(0.2, inplace=True)
+        )
+        self.conv3 = Sequential(
+            Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+            BatchNorm2d(256),
+            LeakyReLU(0.2, inplace=True)
+        )
+        self.conv4 = Sequential(
+            Conv2d(256, 512, kernel_size=4, stride=2, padding=1),
+            BatchNorm2d(512),
+            LeakyReLU(0.2, inplace=True)
+        )
+        self.conv5 = Sequential(
+            Conv2d(512, 1, kernel_size=4, stride=1, padding=0),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.conv5(x)
+        return x.view(-1, 1).squeeze(1)
+
+# Initialize the generator and discriminator
+generator = Generator()
+discriminator = Discriminator()
+
+# Define the loss functions
+criterion_GAN = nn.BCELoss()
+criterion_L1 = nn.L1Loss()
+
+# Define the optimizers
+optimizer_G = optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+optimizer_D = optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+# Training loop
+
+num_epochs = 50
+
+for epoch in range(num_epochs):
+    for i, (images, noisy_images) in enumerate(ssl_dl):
+        # Train the generator
+        generator.zero_grad()
+        
+        # Generate reconstructed images
+        reconstructed_images = generator(noisy_images)
+        
+        # Adversarial loss
+        valid = torch.ones(images.size(0), 1, requires_grad=False)
+        fake = torch.zeros(images.size(0), 1, requires_grad=False)
+        g_loss_adv = criterion_GAN(discriminator(reconstructed_images), valid)
+        
+        # L1 loss
+        g_loss_l1 = criterion_L1(reconstructed_images, images)
+        
+        # Total generator loss
+        g_loss = g_loss_adv + g_loss_l1
+        
+        g_loss.backward()
+        optimizer_G.step()
+        
+        # Train the discriminator
+        discriminator.zero_grad()
+        
+        # Real loss
+        real_loss = criterion_GAN(discriminator(images), valid)
+        
+        # Fake loss
+        fake_loss = criterion_GAN(discriminator(reconstructed_images.detach()), fake)
+        
+        # Total discriminator loss
+        d_loss = (real_loss + fake_loss) / 2
+        
+        d_loss.backward()
+        optimizer_D.step()
+        
+        # Print progress
+        print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{i+1}/{len(ssl_dl)}], "
+              f"G Loss: {g_loss.item():.4f}, D Loss: {d_loss.item():.4f}")
+
 # %% [markdown]
 # ----
 # # <center>Transfer Learning from SSL
 
 # %%
 # this is the transfer learning part, the encoder is extracted from the SSL model and used to train a new model
+experiment_name = 'tinynetClassicv2'
 
 ssl_model_ = torch.load(f'models/ssl/ssl_{experiment_name}.pth')
 
