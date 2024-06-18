@@ -341,7 +341,6 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
                 running_loss += loss.item()
                 
                 _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
                 correct += (predicted == labels).sum().item()
                 writer.add_scalar("val", loss.item(), n_iter)
         
@@ -349,7 +348,7 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
         
         pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc: {best_running_acc:.3f}%')
         val_loss.append(running_loss/len(val_dl))
-        val_acc.append(100*correct/total)
+        val_acc.append(100*correct/len(val_ds))
         if val_acc[-1] > best_running_acc:
             pbar.set_description(f'Epoch: {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.3f}, Train Acc: {train_acc[-1]:.3f}%, Val Loss: {running_loss/len(val_dl):.3f}, Val Acc: {100*correct/total:.3f}%, Acc to beat: {best_acc:.3f}%, best running acc beated, saving model')
             best_running_acc = val_acc[-1]
@@ -410,8 +409,6 @@ train(model = model,
       device = device)
 
 # %%
-
-# %%
 # this plot is hard to  visualize because of the number of classes, but it's useful to see the training progress
 import torchmetrics as tm
 
@@ -429,6 +426,7 @@ def evaluate_model(net, test_loader):
     macro_precision = tm.Precision(task='multiclass', average='macro', num_classes=251).to(device)
     micro_recall = tm.Recall(task='multiclass', average='micro', num_classes=251).to(device)
     macro_recall = tm.Recall(task='multiclass', average='macro', num_classes=251).to(device)
+    correct = 0
 
     with torch.no_grad():
         for el, labels in test_loader:
@@ -445,15 +443,19 @@ def evaluate_model(net, test_loader):
             macro_precision.update(predicted, labels)
             micro_recall.update(predicted, labels)
             macro_recall.update(predicted, labels)
-
+            correct += (predicted == labels).sum().item()
+            
             gt.extend(labels.cpu().numpy())
             pred.extend(predicted.cpu().numpy())
-
+            
+    correct = correct/len(test_loader.dataset)
     print(f"""
           Micro Accuracy: {micro_acc.compute().item()}\tMacro Accuracy:\t{macro_acc.compute().item()}
           Micro F1 Score: {micro_f1_score.compute().item()}\tMacro F1 Score:\t{macro_f1_score.compute().item()}
           Micro Precision:{micro_precision.compute().item()}\tMacro Precision:{macro_precision.compute().item()}
           Micro Recall:   {micro_recall.compute().item()}\tMacro Recall:\t{macro_recall.compute().item()}
+
+          Old accuracy: {correct}
           """)
     
     cm = confusion_matrix(gt, pred)
@@ -463,7 +465,7 @@ def evaluate_model(net, test_loader):
     plt.ylabel('Actual')
     plt.show()
 
-model = torch.load('models/best_tinyNetv3.pth')['model']
+model = torch.load('models/best_tinynet_sslv2.pth')['model']
 evaluate_model(model, val_dl)
 
 
@@ -718,11 +720,11 @@ ssl_model_ = torch.load(f'models/ssl/ssl_{experiment_name}.pth')
 
 tinynet = ssl_model_.encoder
 
-optimizer = torch.optim.Adam(tinynet.parameters(), lr=0.001)
+optimizer = torch.optim.AdamW(tinynet.parameters(), lr=0.001, fused=True)
 criterion = torch.nn.CrossEntropyLoss()
 epochs = 150
 writer = SummaryWriter('runs/tinynet_ssl')
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=1)
 
 
 train(model=tinynet,
@@ -738,20 +740,37 @@ train(model=tinynet,
         device=device)
 
 # %%
-plot_confusion_matrix(tinynet, val_dl)
+evaluate_model(tinynet, val_dl)
+
+# %% [markdown]
+# ----
+# # <center> Hyperparamter tuning
+# For the implementation of the hyperparameter tuning refer to the script `htuning.py`, we opted to write it in a separate script as jupyter notebook doesn't free memory in certain critical circumstances.<br>
+# The hyperparameter tuning starts from line 308, the previous lines are just a redefinition of the network and datasets as done in the previous sections.
 
 # %% [markdown]
 # ----
 # # <center>Plots
 
+# %% [markdown]
+# The data regarding the accuracy and loss during training is stored under the directory `pickles`.<br>
+# The naming convetion is as follows:
+#
+# - `tinyNetClassic`: refers to the network without hyperparameter tuning and without SSL pretraining <br>
+# - `tinyNetClassic_ssl`: refers to the network without hyperparameter tuning <emph>with</emph> SSL pretraining <br>
+# - `tinyNetv3`: refers to the hyperparamter tuned network without SSL pretraining <br>
+# - `tinyNetv3_ssl`: refers to the hyperparameter tuned network <emph>with</emph> SSL pretraining <br>
+#
+# Change the name in `experiment_name` accordingly to what you prefer to visualize
+
 # %%
-experiment_name = 'tinyNetv3'
+experiment_name = 'tinyNetClassic'
 fontsize = 18
 
-train_acc = pickle.load(open(f'cetriolini/{experiment_name}_train_acc.pkl', 'rb'))
-val_acc = pickle.load(open(f'cetriolini/{experiment_name}_val_acc.pkl', 'rb'))
-train_loss = pickle.load(open(f'cetriolini/{experiment_name}_train_loss.pkl', 'rb'))
-val_loss = pickle.load(open(f'cetriolini/{experiment_name}_val_loss.pkl', 'rb'))
+train_acc = pickle.load(open(f'pickles/{experiment_name}_train_acc.pkl', 'rb'))
+val_acc = pickle.load(open(f'pickles/{experiment_name}_val_acc.pkl', 'rb'))
+train_loss = pickle.load(open(f'pickles/{experiment_name}_train_loss.pkl', 'rb'))
+val_loss = pickle.load(open(f'pickles/{experiment_name}_val_loss.pkl', 'rb'))
 
 plt.figure(figsize=(25, 10))
 
@@ -776,138 +795,6 @@ plt.xticks(fontsize=fontsize)
 plt.yticks(fontsize=fontsize)
 
 plt.show()
-
-
-# %%
-train_acc_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_train_acc.pkl', 'rb'))
-val_acc_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_val_acc.pkl', 'rb'))
-train_loss_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_train_loss.pkl', 'rb'))
-val_loss_ssl = pickle.load(open(f'cetriolini/{experiment_name}_ssl_val_loss.pkl', 'rb'))
-
-plt.figure(figsize=(25, 10))
-plt.subplot(1, 2, 1)
-plt.plot(train_acc_ssl, label='train')
-plt.plot(val_acc_ssl, label='val')
-plt.title('Accuracy', fontsize=fontsize)
-plt.xlabel('Epoch', fontsize=fontsize)
-plt.ylabel('Accuracy', fontsize=fontsize)
-plt.legend(fontsize=fontsize)
-plt.xticks(fontsize=fontsize)
-plt.yticks(fontsize=fontsize)
-
-# Loss plot
-plt.subplot(1, 2, 2)
-plt.plot(train_loss_ssl, label='train')
-plt.plot(val_loss_ssl, label='val')
-plt.title('Loss', fontsize=fontsize)
-plt.xlabel('Epoch', fontsize=fontsize)
-plt.ylabel('Loss', fontsize=fontsize)
-plt.legend(fontsize=fontsize)
-plt.xticks(fontsize=fontsize)
-plt.yticks(fontsize=fontsize)
-
-plt.show()
-
-# %%
-train_acc_classic = pickle.load(open(f'cetriolini/tinyNetClassic_train_acc.pkl', 'rb'))
-val_acc_classic = pickle.load(open(f'cetriolini/tinyNetClassic_val_acc.pkl', 'rb'))
-train_loss_classic = pickle.load(open(f'cetriolini/tinyNetClassic_train_loss.pkl', 'rb'))
-val_loss_classic = pickle.load(open(f'cetriolini/tinyNetClassic_val_loss.pkl', 'rb'))
-
-plt.figure(figsize=(25, 10))
-plt.subplot(1, 2, 1)
-plt.plot(train_acc_classic, label='train')
-plt.plot(val_acc_classic, label='val')
-plt.title('Accuracy', fontsize=fontsize)
-plt.xlabel('Epoch', fontsize=fontsize)
-plt.ylabel('Accuracy', fontsize=fontsize)
-plt.legend(fontsize=fontsize)
-plt.xticks(fontsize=fontsize)
-plt.yticks(fontsize=fontsize)
-
-# Loss plot
-plt.subplot(1, 2, 2)
-plt.plot(train_loss_classic, label='train')
-plt.plot(val_loss_classic, label='val')
-plt.title('Loss', fontsize=fontsize)
-plt.xlabel('Epoch', fontsize=fontsize)
-plt.ylabel('Loss', fontsize=fontsize)
-plt.legend(fontsize=fontsize)
-plt.xticks(fontsize=fontsize)
-plt.yticks(fontsize=fontsize)
-plt.show()
-
-# %%
-train_acc_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_train_acc.pkl', 'rb'))
-val_acc_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_val_acc.pkl', 'rb'))
-train_loss_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_train_loss.pkl', 'rb'))
-val_loss_ssl = pickle.load(open(f'cetriolini/tinyNetClassic_ssl_val_loss.pkl', 'rb'))
-
-plt.figure(figsize=(25, 10))
-plt.subplot(1, 2, 1)
-plt.plot(train_acc_ssl, label='train')
-plt.plot(val_acc_ssl, label='val')
-plt.title('Accuracy', fontsize=fontsize)
-plt.xlabel('Epoch', fontsize=fontsize)
-plt.ylabel('Accuracy', fontsize=fontsize)
-plt.legend(fontsize=fontsize)
-plt.xticks(fontsize=fontsize)
-plt.yticks(fontsize=fontsize)
-
-# Loss plot
-plt.subplot(1, 2, 2)
-plt.plot(train_loss_ssl, label='train')
-plt.plot(val_loss_ssl, label='val')
-plt.title('Loss', fontsize=fontsize)
-plt.xlabel('Epoch', fontsize=fontsize)
-plt.ylabel('Loss', fontsize=fontsize)
-plt.legend(fontsize=fontsize)
-plt.xticks(fontsize=fontsize)
-plt.yticks(fontsize=fontsize)
-
-plt.show()
-
-# %%
-plt.figure(figsize=(25, 10))
-plt.subplot(1, 2, 1)
-plt.plot(val_acc, label='tinynet')
-plt.plot(val_acc_ssl, label='tinynet_ssl')
-plt.title('Accuracy')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
-
-plt.subplot(1, 2, 2)
-plt.plot(val_loss, label='tinynet')
-plt.plot(val_loss_ssl, label='tinynet_ssl')
-plt.title('Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
-plt.show()
-
-
-# %%
-ssl_loss = pickle.load(open(f'models/ssl_{experiment_name}_train_loss_mean.pkl', 'rb'))
-
-plt.figure(figsize=(30, 10))
-plt.plot(ssl_loss)
-plt.title('SSL Loss')
-plt.xlabel('Batch')
-plt.ylabel('Loss')
-plt.show()
-
-
-# %%
-# load the model
-experiment_name = 'tinyNetClassic_ssl'
-
-checkpoint = torch.load(f'models/best_{experiment_name}.pth')
-model = checkpoint['model']
-model.to(device)
-model.eval()
-
-
 
 
 # %%
@@ -956,6 +843,7 @@ def class_precision(model, test_dl, class_labels):
     return precision_dict
 
 
+model = torch.load(f'models/best_{experiment_name}.pth')['model']
 
 # create a tuple with the class name and the precision, so that i can later sort it
 precision = class_precision(model, val_dl, class_list['index'].values)
@@ -1048,76 +936,24 @@ plt.show()
 
 
 # %%
-mean_precision = np.mean(list(precision))
+mean_precision = np.mean(list(precision.values()))
 
-mean_recall = np.mean(list(recall))
+mean_recall = np.mean(list(recall.values()))
 
-mean_f1 = np.mean(list(f1))
+mean_f1 = np.mean(list(f1.values()))
 
 print(f'Mean Precision: {mean_precision:.3f}')
 print(f'Mean Recall: {mean_recall:.3f}')
 print(f'Mean F1: {mean_f1:.3f}')
 
 
-# %%
-def get_confusion_matrix(model, test_dl):
-    model.eval()
-    gt, pred = [], []
-    with torch.no_grad():
-        for el, labels in test_dl:
-            el = el.to(device)
-            labels = labels.to(device)
-            out = model(el)
-            _, predicted = torch.max(out, 1)
-            gt.extend(labels.cpu().numpy())
-            pred.extend(predicted.cpu().numpy())
-    return gt, pred
-
-
-def calculate_metrics(cm):
-    precision = np.diag(cm) / np.sum(cm, axis=1)
-    recall = np.diag(cm) / np.sum(cm, axis=0)
-    f1 = 2 * (precision * recall) / (precision + recall)
-    return np.nan_to_num(precision, nan=0.0), np.nan_to_num(recall, nan=0.0), np.nan_to_num(f1, nan=0.0)
-
-
-gt, pred = get_confusion_matrix(model, val_dl)
-classes = sorted(set(gt))
-cm = confusion_matrix(gt, pred, labels=classes)
-precision, recall, f1 = calculate_metrics(cm)
-
-low_f1_indices = np.argsort(f1)[:5]
-low_recall_indices = np.argsort(recall)[:5]
-low_precision_indices = np.argsort(precision)[:5]
-
-
-def plot_images(indices, title, gt_labels, pred_labels, dataset, num_images=5):
-    mean = torch.tensor([0.485, 0.456, 0.406])
-    std = torch.tensor([0.229, 0.224, 0.225])
-    
-    fig, axes = plt.subplots(1, num_images, figsize=(20, 5))
-    for i, idx in enumerate(indices):
-        img, label = dataset[idx]
-        img = img * std[:, None, None] + mean[:, None, None]  # Unnormalize
-        img = torch.clamp(img, 0, 1)
-        
-        axes[i].imshow(img.permute(1, 2, 0))
-        axes[i].set_title(f'True: {class_list.loc[gt_labels[idx], "name"]}\nPred: {class_list.loc[pred_labels[idx], "name"]}')
-        axes[i].axis('off')
-    
-    plt.suptitle(title)
-    plt.tight_layout()
-    plt.show()
-
-
-plot_images(low_f1_indices, 'Lowest F1 Scores', gt, pred, val_dl.dataset)
-plot_images(low_recall_indices, 'Lowest Recall Scores', gt, pred, val_dl.dataset)
-plot_images(low_precision_indices, 'Lowest Precision Scores', gt, pred, val_dl.dataset)
-
+# %% [markdown]
+# # Extra
+# The following part of the project has been abandoned and not referenced in the report. Nonetheless it seemed wasteful to delete it, we left it just to show our progress in SIFT and BoW, although we ended up choosing for SSL.
 
 # %% [markdown]
 # ----
-# # <center>SIFT and Bag of Words for feature extraction
+# ## <center>SIFT and Bag of Words for feature extraction
 
 # %%
 def extract_sift_features(image_path):
@@ -1224,7 +1060,7 @@ extract_save_bag_of_words(val_features, dictionary, 'dataset/val_bow')
 
 # %% [markdown]
 # ----
-# # <center>CNN with BoW features
+# ## <center>CNN with BoW features
 
 # %%
 class FoodBowDataset(Dataset):
@@ -1378,131 +1214,4 @@ epochs = 100
 print(f'the model has {sum(p.numel() for p in model.parameters())} parameters')
 
 train(model, train_bow_dl, val_bow_dl, optimizer, criterion, epochs)
-
-
-# %% [markdown]
-# ----
-# # <center> Hyperparameter tuning
-
-# %%
-import optuna
-from optuna.pruners import BasePruner
-
-class MaxParameterPruner(BasePruner):
-    def __init__(self, max_params):
-        self.max_params = max_params
-
-    def prune(self, study, trial):
-            # Define the hyperparameters to tune
-        c1_filters = trial.suggest_int('num_filters1', 8, 32)
-        c2_filters = trial.suggest_int('num_filters2', 16, 64)
-        c3_filters = trial.suggest_int('num_filters3', 32, 128)
-        c4_filters = trial.suggest_int('num_filters4', 64, 256)
-        c5_filters = trial.suggest_int('num_filters5', 64, 256)
-        fc1_units = trial.suggest_int('fc1_units', 128, 512)
-
-        # Create the model with the given hyperparameters
-        model = tinyNet(c1_filters, c2_filters, c3_filters, c4_filters, c5_filters, fc1_units).to(device)
-
-        # Calculate the number of parameters
-        num_params = sum(p.numel() for p in model.parameters())
-
-        # If the number of parameters exceeds 1 million, return a large negative value
-        if num_params > self.max_params:
-            study.set_user_attr('num_params', num_params)
-            return optuna.exceptions.TrialPruned()
-
-
-def objective(trial):
-    # Define the hyperparameters to tune
-    c1_filters = trial.suggest_int('num_filters1', 8, 32)
-    c2_filters = trial.suggest_int('num_filters2', 16, 64)
-    c3_filters = trial.suggest_int('num_filters3', 32, 128)
-    c4_filters = trial.suggest_int('num_filters4', 64, 256)
-    c5_filters = trial.suggest_int('num_filters5', 64, 256)
-    fc1_units = trial.suggest_int('fc1_units', 128, 512)
-
-    # Create the model with the given hyperparameters
-
-    model = tinyNet(c1_filters, c2_filters, c3_filters, c4_filters, c5_filters, fc1_units).to(device)
-
-    # Calculate the number of parameters
-
-    train_ds = FoodDataset(get_fraction_of_data(train_df, 0.1), 'dataset/train_set', aug_transform)
-    val_ds = FoodDataset(get_fraction_of_data(val_df, 0.1), 'dataset/val_set', transform)
-
-    train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8)
-    val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    criterion = torch.nn.CrossEntropyLoss()
-    epochs = 15
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0.0001)
-    experiment_name = 'tinyNetHT'
-    writer = SummaryWriter('runs/'+experiment_name)
-
-
-    accuracy = train(model=model,
-                     train_dl=train_dl, 
-                     val_dl=val_dl, 
-                     optimizer=optimizer, 
-                     criterion=criterion, 
-                     scheduler=scheduler,
-                     epochs=epochs, 
-                     writer=writer, 
-                     experiment_name=experiment_name, 
-                     best_experiment_name='tinyNetv2', 
-                     device=device)
-
-    return accuracy
-
-def get_fraction_of_data(df, fraction, stratified=True):
-    if stratified:
-        _, train_df = train_test_split(df, test_size=fraction, stratify=df['label'])
-    else:
-        _, train_df = train_test_split(df, test_size=fraction)
-    # return DataLoader(FoodDataset(df.iloc[train_df], 'dataset/train_set', transform), batch_size=128, shuffle=True, num_workers=8)
-    return train_df
-
-
-# %%
-get_fraction_of_data(train_df, 0.1).head(4)
-
-
-# %%
-def run_trial(trial):
-    try:
-        accuracy = objective(trial)
-        return accuracy
-    except Exception as e:
-        raise optuna.exceptions.TrialPruned()
-
-
-# %%
-study = optuna.create_study(direction='maximize', study_name='tinyNetHT')
-study.optimize(objective, n_trials=100)
-
-study.best_params
-
-# %% [markdown]
-# ----
-# # <center>Playground
-
-# %%
-# extract sift from 1/4 of the images in the training set
-#train_14_features = extract_sift_features_from_df(train_df.iloc[::4], 'dataset/train_set')
-
-# %%
-# extract bow from 1/4 of the images in the training set
-#dictionary = MiniBatchKMeans(n_clusters=1000, random_state=0)
-#ictionary.fit(np.concatenate(train_14_features))
-#train_14_bow = extract_bag_of_words(train_14_features, dictionary)
-
-# %%
-# visualize the bow of the first image
-plt.bar(range(len(train_14_bow[0])), train_14_bow[0])
-plt.xlabel('Visual Word Index')
-plt.ylabel('Frequency')
-plt.title('Bag of Words')
-plt.show()
 

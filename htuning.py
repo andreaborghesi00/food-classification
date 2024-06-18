@@ -1,45 +1,24 @@
-
 import os
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import pandas as pd
-import pickle
-import cv2
 import gc
-
-
-from torch.nn import Conv2d, MaxPool2d, Linear, ReLU, BatchNorm2d, Dropout, Flatten, Sequential, Module, GELU, LeakyReLU, BatchNorm2d
+from torch.nn import Conv2d, MaxPool2d, Linear, BatchNorm2d, Dropout, Sequential, Module, GELU, BatchNorm2d
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
-from sklearn.cluster import MiniBatchKMeans
-from sklearn.metrics import confusion_matrix
 from torchvision import transforms
-import seaborn as sns
 from PIL import Image
 from tqdm import tqdm
-from torchsummary import summary
-
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
-
 import optuna
 from optuna.pruners import BasePruner
     
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# %%
-# %reload_ext tensorboard
-# %tensorboard --logdir={experiment_name}
-
-# %%
+# The following lines, up to line 308 are the same as the ones in the notebook, they just redefine the network and the dataset for the hyperparameter tuning 
+ 
 if not os.path.exists('dataset'):
     os.makedirs('dataset')
 
@@ -64,8 +43,6 @@ if not os.path.exists('dataset/val_set'):
     os.system('rm dataset/val.tar')
 
 
-# %%
-
 def get_df(path, class_list=None):
     
     df = pd.read_csv(path, header=None)
@@ -86,7 +63,7 @@ val_df = get_df('dataset/val_info.csv', class_list)
 train_df
 
 
-# %%
+ 
 class FoodDataset(Dataset):
         def __init__(self, df, root_dir, transform=None):
             self.df = df
@@ -109,8 +86,6 @@ class FoodDataset(Dataset):
             else:
                 return image
 
-
-# %%
 
 transform = transforms.Compose([
     transforms.Resize((128, 128)),
@@ -141,11 +116,6 @@ test_dl = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
 val_dl = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
 
 
-# %% [markdown]
-# ----
-# # <center>Neural Networks
-
-# %%
 class tinyNet(Module):
     def __init__(self, c1_filters=8, c2_filters=32, c3_filters=64, c4_filters=128, c5_filters=172, fc1_units=256):
         super(tinyNet, self).__init__()
@@ -214,8 +184,6 @@ class tinyNet(Module):
         x = self.fc2(x)
         return x
 
-
-# %%
 def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writer, experiment_name, best_experiment_name, device='cuda'):
     train_loss = []
     val_loss = []
@@ -337,6 +305,7 @@ def train(model, train_dl, val_dl, optimizer, scheduler, criterion, epochs, writ
     return max(val_acc)
 
 
+# Hyperparameter tuning
 class MaxParameterPruner(BasePruner):
     def __init__(self, max_params, min_params=0):
         self.max_params = max_params
