@@ -1,4 +1,6 @@
 **/dataset/
+**/datasets/
 main.ipynb
 **/models/
 **/runs/
+.DS_Store
